@@ -38,6 +38,14 @@ class Settings:
     log_pii: bool
     update_source_task: bool
     allow_report_without_person_fields: bool = False
+    salesforce_auth_mode: str = "oauth"
+    salesforce_client_id: str | None = None
+    salesforce_client_secret: str | None = None
+    salesforce_redirect_uri: str = "http://localhost:8765/callback"
+    salesforce_refresh_token: str | None = None
+    salesforce_access_token: str | None = None
+    salesforce_instance_url: str | None = None
+    salesforce_token_path: Path = Path(".salesforce_token.json")
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> Settings:
@@ -68,6 +76,18 @@ class Settings:
             allow_report_without_person_fields=_as_bool(
                 os.getenv("ALLOW_REPORT_WITHOUT_PERSON_FIELDS"), False
             ),
+            salesforce_auth_mode=os.getenv("SALESFORCE_AUTH_MODE", "oauth").strip().lower(),
+            salesforce_client_id=os.getenv("SALESFORCE_CLIENT_ID") or None,
+            salesforce_client_secret=os.getenv("SALESFORCE_CLIENT_SECRET") or None,
+            salesforce_redirect_uri=os.getenv(
+                "SALESFORCE_REDIRECT_URI", "http://localhost:8765/callback"
+            ),
+            salesforce_refresh_token=os.getenv("SALESFORCE_REFRESH_TOKEN") or None,
+            salesforce_access_token=os.getenv("SALESFORCE_ACCESS_TOKEN") or None,
+            salesforce_instance_url=os.getenv("SALESFORCE_INSTANCE_URL") or None,
+            salesforce_token_path=Path(
+                os.getenv("SALESFORCE_TOKEN_PATH", ".salesforce_token.json")
+            ),
         )
         settings.validate()
         return settings
@@ -79,9 +99,19 @@ class Settings:
             raise ValueError("SF_READ_ONLY debe permanecer en true en el MVP")
         if self.max_export_rows <= 0:
             raise ValueError("MAX_EXPORT_ROWS debe ser mayor que cero")
+        if self.salesforce_auth_mode not in {"oauth", "password"}:
+            raise ValueError("SALESFORCE_AUTH_MODE debe ser 'oauth' o 'password'")
 
     @property
     def has_salesforce_credentials(self) -> bool:
+        return self.has_salesforce_password_credentials
+
+    @property
+    def has_salesforce_password_credentials(self) -> bool:
         return bool(
             self.salesforce_username and self.salesforce_password and self.salesforce_security_token
         )
+
+    @property
+    def has_salesforce_oauth_client_credentials(self) -> bool:
+        return bool(self.salesforce_client_id and self.salesforce_client_secret)

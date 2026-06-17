@@ -1,4 +1,6 @@
 .env
+.salesforce_token.json
+.DS_Store
 .venv/
 __pycache__/
 *.py[cod]
@@ -10,4 +12,3 @@ __pycache__/
 htmlcov/
 artifacts/*
 !artifacts/.gitkeep
-

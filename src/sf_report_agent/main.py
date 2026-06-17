@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import secrets
 import sys
+import webbrowser
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -20,6 +22,16 @@ from sf_report_agent.graph.nodes import AgentServices
 from sf_report_agent.llm.ollama_client import OllamaClient, OllamaError
 from sf_report_agent.logging_config import configure_logging
 from sf_report_agent.salesforce.client import SalesforceClient, SalesforceClientError
+from sf_report_agent.salesforce.oauth import (
+    OAuthCallbackReceiver,
+    SalesforceOAuthError,
+    SalesforceOAuthToken,
+    build_authorization_url,
+    exchange_authorization_code,
+    load_token_file,
+    refresh_access_token,
+    save_token_file,
+)
 from sf_report_agent.salesforce.permissions_doctor import SalesforcePermissionsDoctor
 
 console = Console()
@@ -45,16 +57,61 @@ def _ollama(settings: Settings) -> OllamaClient:
 
 
 def _salesforce(settings: Settings) -> SalesforceClient:
-    if not settings.has_salesforce_credentials:
-        raise SalesforceClientError(
-            "Faltan SALESFORCE_USERNAME, SALESFORCE_PASSWORD o SALESFORCE_SECURITY_TOKEN"
+    if settings.salesforce_auth_mode == "password":
+        if not settings.has_salesforce_password_credentials:
+            raise SalesforceClientError(
+                "Faltan SALESFORCE_USERNAME, SALESFORCE_PASSWORD o SALESFORCE_SECURITY_TOKEN"
+            )
+        return SalesforceClient.from_password(
+            username=settings.salesforce_username or "",
+            password=settings.salesforce_password or "",
+            security_token=settings.salesforce_security_token or "",
+            domain=settings.salesforce_domain,
         )
-    return SalesforceClient(
-        username=settings.salesforce_username or "",
-        password=settings.salesforce_password or "",
-        security_token=settings.salesforce_security_token or "",
-        domain=settings.salesforce_domain,
+    token = _refresh_oauth_session(settings)
+    return SalesforceClient.from_session(
+        instance_url=token.instance_url,
+        access_token=token.access_token,
+        username=settings.salesforce_username,
     )
+
+
+def _oauth_material(
+    settings: Settings,
+) -> tuple[SalesforceOAuthToken | None, str | None, str | None]:
+    stored_token = (
+        None
+        if settings.salesforce_refresh_token
+        else load_token_file(settings.salesforce_token_path)
+    )
+    refresh_token = settings.salesforce_refresh_token or (
+        stored_token.refresh_token if stored_token else None
+    )
+    instance_url = settings.salesforce_instance_url or (
+        stored_token.instance_url if stored_token else None
+    )
+    return stored_token, refresh_token, instance_url
+
+
+def _refresh_oauth_session(settings: Settings) -> SalesforceOAuthToken:
+    _, refresh_token, instance_url = _oauth_material(settings)
+    if not refresh_token:
+        raise SalesforceClientError(
+            "No hay refresh token. Ejecutá python -m sf_report_agent.main sf-oauth-login."
+        )
+    if not settings.has_salesforce_oauth_client_credentials:
+        raise SalesforceClientError(
+            "Faltan SALESFORCE_CLIENT_ID o SALESFORCE_CLIENT_SECRET para OAuth."
+        )
+    token = refresh_access_token(
+        domain=settings.salesforce_domain,
+        client_id=settings.salesforce_client_id or "",
+        client_secret=settings.salesforce_client_secret or "",
+        refresh_token=refresh_token,
+        instance_url=instance_url,
+    )
+    save_token_file(token, settings.salesforce_token_path)
+    return token
 
 
 def _services(settings: Settings, *, dry_run: bool) -> AgentServices:
@@ -115,12 +172,108 @@ def command_doctor(settings: Settings) -> int:
 
 def command_sf_doctor(settings: Settings) -> int:
     client = _salesforce(settings)
+    auth_table = Table(title="Autenticación Salesforce")
+    auth_table.add_column("Modo")
+    auth_table.add_column("Instance URL")
+    auth_table.add_column("Refresh token usado")
+    auth_table.add_row(
+        settings.salesforce_auth_mode,
+        client.instance_url or "desconocida",
+        "sí" if settings.salesforce_auth_mode == "oauth" else "no",
+    )
+    console.print(auth_table)
     doctor = SalesforcePermissionsDoctor(client, artifacts_dir=settings.artifacts_dir)
     report = doctor.run()
     path = doctor.save(report)
     doctor.print_report(report, console)
+    console.print("Login OK: " + ("sí" if report.login_ok else "no"))
+    console.print("API OK: " + ("sí" if report.api_ok else "no"))
     console.print(f"Reporte guardado en: {path}")
     return 0 if report.login_ok and report.api_ok and report.describe_global_ok else 1
+
+
+def command_sf_oauth_login(settings: Settings) -> int:
+    if settings.salesforce_auth_mode != "oauth":
+        raise SalesforceOAuthError("sf-oauth-login requiere SALESFORCE_AUTH_MODE=oauth.")
+    if not settings.has_salesforce_oauth_client_credentials:
+        raise SalesforceOAuthError(
+            "Faltan SALESFORCE_CLIENT_ID o SALESFORCE_CLIENT_SECRET para OAuth."
+        )
+    state = secrets.token_urlsafe(32)
+    authorization_url = build_authorization_url(
+        domain=settings.salesforce_domain,
+        client_id=settings.salesforce_client_id or "",
+        redirect_uri=settings.salesforce_redirect_uri,
+        state=state,
+    )
+    receiver = OAuthCallbackReceiver(
+        redirect_uri=settings.salesforce_redirect_uri,
+        expected_state=state,
+    )
+    console.print("Abrí esta URL para autenticar Salesforce con MFA:")
+    console.print(authorization_url, markup=False)
+    try:
+        browser_opened = webbrowser.open(authorization_url)
+    except webbrowser.Error:
+        browser_opened = False
+    if browser_opened:
+        console.print("Se abrió el navegador. Esperando el callback local…")
+    else:
+        console.print("No se pudo abrir el navegador automáticamente; usá la URL impresa.")
+    code = receiver.wait_for_code()
+    token = exchange_authorization_code(
+        domain=settings.salesforce_domain,
+        client_id=settings.salesforce_client_id or "",
+        client_secret=settings.salesforce_client_secret or "",
+        redirect_uri=settings.salesforce_redirect_uri,
+        code=code,
+    )
+    save_token_file(token, settings.salesforce_token_path)
+    console.print(f"Instance URL: {token.instance_url}")
+    console.print(f"Token guardado en: {settings.salesforce_token_path}")
+    console.print("Refresh token presente: " + ("sí" if token.refresh_token else "no"))
+    return 0 if token.refresh_token else 1
+
+
+def command_sf_auth_status(settings: Settings, *, output: Console | None = None) -> int:
+    target = output or console
+    token_file_exists = settings.salesforce_token_path.exists()
+    refresh_present = False
+    instance_url = settings.salesforce_instance_url
+    refresh_status = "no aplica"
+    ok = False
+
+    if settings.salesforce_auth_mode == "password":
+        ok = settings.has_salesforce_password_credentials
+        refresh_status = "no aplica (password)"
+    else:
+        _, refresh_token, stored_instance_url = _oauth_material(settings)
+        refresh_present = bool(refresh_token)
+        instance_url = instance_url or stored_instance_url
+        if not refresh_token:
+            refresh_status = "no: falta refresh token"
+        elif not settings.has_salesforce_oauth_client_credentials:
+            refresh_status = "no: faltan client ID/secret"
+        else:
+            try:
+                token = _refresh_oauth_session(settings)
+                instance_url = token.instance_url
+                refresh_status = "sí"
+                ok = True
+            except (SalesforceOAuthError, SalesforceClientError) as exc:
+                refresh_status = f"no: {exc}"
+
+    token_file_exists = settings.salesforce_token_path.exists()
+    table = Table(title="Estado de autenticación Salesforce")
+    table.add_column("Dato")
+    table.add_column("Valor")
+    table.add_row("Auth mode", settings.salesforce_auth_mode)
+    table.add_row("Token file existe", "sí" if token_file_exists else "no")
+    table.add_row("Refresh token presente", "sí" if refresh_present else "no")
+    table.add_row("Instance URL", instance_url or "desconocida")
+    table.add_row("Puede refrescar access token", refresh_status)
+    target.print(table)
+    return 0 if ok else 1
 
 
 def command_inspect_schema(
@@ -236,6 +389,12 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor", help="Valida entorno local, SQLite y Ollama")
     subparsers.add_parser("sf-doctor", help="Diagnostica permisos read-only de Salesforce")
+    subparsers.add_parser(
+        "sf-oauth-login", help="Autoriza Salesforce con MFA y guarda un refresh token"
+    )
+    subparsers.add_parser(
+        "sf-auth-status", help="Muestra el estado de autenticación sin revelar secretos"
+    )
     inspect_parser = subparsers.add_parser(
         "inspect-schema", help="Lista campos visibles de un objeto Salesforce"
     )
@@ -261,6 +420,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return command_doctor(settings)
         if args.command == "sf-doctor":
             return command_sf_doctor(settings)
+        if args.command == "sf-oauth-login":
+            return command_sf_oauth_login(settings)
+        if args.command == "sf-auth-status":
+            return command_sf_auth_status(settings)
         if args.command == "inspect-schema":
             return command_inspect_schema(
                 settings,
@@ -276,6 +439,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         SourceDatabaseError,
         SalesforceClientError,
+        SalesforceOAuthError,
         OllamaError,
         ValueError,
         RuntimeError,

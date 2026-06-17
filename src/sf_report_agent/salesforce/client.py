@@ -5,6 +5,12 @@ from typing import Any
 from simple_salesforce.api import Salesforce
 from simple_salesforce.format import format_soql
 
+from sf_report_agent.salesforce.oauth import (
+    SalesforceOAuthError,
+    refresh_access_token,
+    sanitize_secrets,
+)
+
 
 class SalesforceClientError(RuntimeError):
     pass
@@ -21,6 +27,8 @@ class SalesforceClient:
         security_token: str,
         domain: str = "login",
     ) -> None:
+        self.username: str | None = username
+        self._instance_url: str | None = None
         try:
             self._sf = Salesforce(
                 username=username,
@@ -29,13 +37,79 @@ class SalesforceClient:
                 domain=domain,
             )
         except Exception as exc:
+            message = sanitize_secrets(str(exc), password, security_token)
             raise SalesforceClientError(
-                f"No fue posible iniciar sesión en Salesforce: {exc}"
+                f"No fue posible iniciar sesión en Salesforce: {message}"
             ) from exc
-        self.username = username
+
+    @classmethod
+    def from_password(
+        cls,
+        *,
+        username: str,
+        password: str,
+        security_token: str,
+        domain: str = "login",
+    ) -> SalesforceClient:
+        return cls(
+            username=username,
+            password=password,
+            security_token=security_token,
+            domain=domain,
+        )
+
+    @classmethod
+    def from_session(
+        cls,
+        *,
+        instance_url: str,
+        access_token: str,
+        username: str | None = None,
+    ) -> SalesforceClient:
+        try:
+            salesforce = Salesforce(instance_url=instance_url, session_id=access_token)
+        except Exception as exc:
+            message = sanitize_secrets(str(exc), access_token)
+            raise SalesforceClientError(
+                f"No fue posible crear la sesión OAuth de Salesforce: {message}"
+            ) from exc
+        client = cls.__new__(cls)
+        client._sf = salesforce
+        client.username = username
+        client._instance_url = instance_url.rstrip("/")
+        return client
+
+    @classmethod
+    def from_refresh_token(
+        cls,
+        *,
+        domain: str,
+        client_id: str,
+        client_secret: str,
+        refresh_token: str,
+        instance_url: str | None = None,
+        username: str | None = None,
+    ) -> SalesforceClient:
+        try:
+            token = refresh_access_token(
+                domain=domain,
+                client_id=client_id,
+                client_secret=client_secret,
+                refresh_token=refresh_token,
+                instance_url=instance_url,
+            )
+        except SalesforceOAuthError as exc:
+            raise SalesforceClientError(str(exc)) from exc
+        return cls.from_session(
+            instance_url=token.instance_url,
+            access_token=token.access_token,
+            username=username,
+        )
 
     @property
     def instance_url(self) -> str | None:
+        if self._instance_url:
+            return self._instance_url
         base_url = getattr(self._sf, "base_url", None)
         if not base_url:
             return None

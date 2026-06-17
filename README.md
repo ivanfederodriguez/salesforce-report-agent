@@ -44,11 +44,47 @@ OLLAMA_TEMPERATURE=0
 
 El parser extrae primero Campaign IDs, año, campañas/fuentes y campos mediante reglas confiables. Solo consulta Ollama cuando necesita completar información faltante, y nunca permite que el modelo reemplace IDs ya extraídos.
 
-## Configuración de Salesforce
+## Salesforce con MFA / OAuth
+
+OAuth es el modo recomendado y el default. Si Salesforce exige MFA y no permite resetear el security token, creá una Connected App con Authorization Code Flow y configurá:
+
+- callback URL: `http://localhost:8765/callback`;
+- scopes: `api refresh_token offline_access`;
+- una política de refresh token compatible con ejecuciones posteriores.
 
 En `.env`:
 
 ```dotenv
+SALESFORCE_AUTH_MODE=oauth
+SALESFORCE_CLIENT_ID=consumer-key-de-la-connected-app
+SALESFORCE_CLIENT_SECRET=consumer-secret-de-la-connected-app
+SALESFORCE_REDIRECT_URI=http://localhost:8765/callback
+SALESFORCE_TOKEN_PATH=.salesforce_token.json
+SALESFORCE_DOMAIN=login
+SF_READ_ONLY=true
+```
+
+Para autenticar y probar:
+
+```bash
+python -m sf_report_agent.main sf-oauth-login
+python -m sf_report_agent.main sf-auth-status
+python -m sf_report_agent.main sf-doctor
+python -m sf_report_agent.main sf-doctor
+```
+
+`sf-oauth-login` abre o imprime la URL de Salesforce, recibe el callback local después del MFA y guarda los tokens en `.salesforce_token.json`. El archivo está ignorado por Git, se crea con permisos `0600` y sus secretos nunca se imprimen. Las siguientes ejecuciones refrescan el access token automáticamente; correr `sf-doctor` dos veces seguidas no debe abrir el navegador ni pedir MFA mientras el refresh token siga vigente.
+
+También se puede proveer `SALESFORCE_REFRESH_TOKEN` y `SALESFORCE_INSTANCE_URL` por entorno. `SALESFORCE_ACCESS_TOKEN` se reconoce como configuración, pero las corridas normales exigen y refrescan un refresh token desde entorno o desde `SALESFORCE_TOKEN_PATH`.
+
+Si la organización bloquea Connected Apps no aprobadas, un administrador puede tener que autorizar la app y sus políticas OAuth.
+
+## Password mode legacy
+
+En `.env`:
+
+```dotenv
+SALESFORCE_AUTH_MODE=password
 SALESFORCE_USERNAME=usuario@example.org
 SALESFORCE_PASSWORD=contraseña
 SALESFORCE_SECURITY_TOKEN=token
@@ -56,7 +92,7 @@ SALESFORCE_DOMAIN=login
 SF_READ_ONLY=true
 ```
 
-Para sandbox usá el dominio que corresponda a la autenticación de la org. Las credenciales no se imprimen ni se guardan en artifacts. `SF_READ_ONLY=false` es rechazado al iniciar.
+Este modo conserva el flujo anterior y requiere security token. Para sandbox usá el dominio que corresponda a la autenticación de la org. Las credenciales no se imprimen ni se guardan en artifacts. `SF_READ_ONLY=false` es rechazado al iniciar.
 
 Permisos mínimos recomendados:
 
@@ -98,6 +134,8 @@ Con el entorno virtual activo:
 
 ```bash
 python -m sf_report_agent.main doctor
+python -m sf_report_agent.main sf-oauth-login
+python -m sf_report_agent.main sf-auth-status
 python -m sf_report_agent.main sf-doctor
 python -m sf_report_agent.main inspect-schema --object Opportunity
 python -m sf_report_agent.main inspect-schema --object Contact --filter campaign
@@ -108,7 +146,7 @@ python -m sf_report_agent.main run-once --dry-run
 python -m sf_report_agent.main run-once
 ```
 
-`doctor` valida SQLite, DB propia, artifacts, Ollama y presencia del modelo. `sf-doctor` intenta login, `describe`, `SELECT ... LIMIT 1`, campos visibles y las tres Campaign IDs del fixture; guarda el resultado en `artifacts/permission_reports/`.
+`doctor` valida SQLite, DB propia, artifacts, Ollama y presencia del modelo. `sf-auth-status` verifica el modo y, en OAuth, prueba el refresh sin mostrar secretos. `sf-doctor` usa password o refresh token según `SALESFORCE_AUTH_MODE`, muestra el modo/instance URL, intenta `describe`, `SELECT ... LIMIT 1`, campos visibles y las tres Campaign IDs del fixture; guarda el resultado en `artifacts/permission_reports/`.
 
 `inspect-schema` lista label, API name, tipo y `referenceTo` de los campos visibles. Guarda cada inspección en `artifacts/schema/<object>_describe_<timestamp>.json`.
 
@@ -139,6 +177,7 @@ El XLSX contiene `datos`, `metadata` y, cuando corresponde, `warnings`.
 - El validador admite únicamente una sentencia `SELECT`, sin comentarios ni keywords destructivas.
 - Los Campaign IDs y nombres de API se validan antes de construir SOQL.
 - `LOG_PII=false` evita dumps de registros; ninguna contraseña o token entra en logs/metadata.
+- `.salesforce_token.json` está excluido de Git y nunca se imprime en consola.
 - `REQUIRE_HUMAN_APPROVAL_FOR_PII=true` deja el resultado como `done_pending_approval`.
 - `ALLOW_REPORT_WITHOUT_PERSON_FIELDS=false` evita generar silenciosamente un reporte incompleto.
 - `UPDATE_SOURCE_TASK=false` mantiene la SQLite fuente intacta.
