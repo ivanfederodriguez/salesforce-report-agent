@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from simple_salesforce import Salesforce
+from simple_salesforce.api import Salesforce
 from simple_salesforce.format import format_soql
 
 
@@ -50,7 +50,10 @@ class SalesforceClient:
 
     def describe_global(self) -> dict[str, Any]:
         try:
-            return dict(self._sf.describe())
+            result = self._sf.describe()
+            if not isinstance(result, dict):
+                raise TypeError("describe_global no devolvió un objeto")
+            return result
         except Exception as exc:
             raise SalesforceClientError(f"Falló describe_global: {exc}") from exc
 
@@ -71,4 +74,3 @@ class SalesforceClient:
     def test_query(self, object_name: str) -> bool:
         self.query_all(f"SELECT Id FROM {object_name} LIMIT 1")
         return True
-

@@ -38,7 +38,9 @@ class ReportRunRepository:
                 "INSERT INTO report_runs(task_id, started_at, status) VALUES (?, ?, ?)",
                 (task_id, _now(), "running"),
             )
-            return int(cursor.lastrowid)
+            if cursor.lastrowid is None:
+                raise RuntimeError("SQLite no devolvió el ID de la corrida creada")
+            return cursor.lastrowid
 
     def finish_run(
         self,
@@ -84,4 +86,3 @@ class ReportRunRepository:
                 """,
                 (run_id, task_id, artifact_type, str(path), _now()),
             )
-

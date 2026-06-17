@@ -4,7 +4,6 @@ import json
 import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from rich.console import Console
 from rich.table import Table
@@ -212,4 +211,3 @@ class SalesforcePermissionsDoctor:
             output.print("[bold]Recomendaciones:[/bold]")
             for recommendation in report.recommended_salesforce_permissions:
                 output.print(f"- {recommendation}")
-

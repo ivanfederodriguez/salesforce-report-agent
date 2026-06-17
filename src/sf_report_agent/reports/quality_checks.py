@@ -51,7 +51,7 @@ def run_quality_checks(
         warnings.append("No se incluyeron campos personales por falta de una relación validada.")
 
     return {
-        "row_count": int(len(dataframe)),
+        "row_count": len(dataframe),
         "columns": list(dataframe.columns),
         "missing_fields": missing_fields,
         "null_percentages": null_percentages,
@@ -62,4 +62,3 @@ def run_quality_checks(
         "duplicate_ids": duplicates,
         "warnings": warnings,
     }
-

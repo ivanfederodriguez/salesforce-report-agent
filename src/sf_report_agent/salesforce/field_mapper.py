@@ -17,8 +17,8 @@ SLACK_LINK_LABEL_RE = re.compile(r"<[^>|]+\|([^>]+)>")
 
 KNOWN_CAMPAIGNS = (
     "[IND] Campañas Pauta Digital",
-    "[IND] Redes Sociales - Instagram",
     "[IND] Redes Sociales",
+    "[IND] Redes Sociales - Instagram",
 )
 KNOWN_SOURCES = ("amplify", "orgánico web")
 
@@ -127,4 +127,3 @@ def parse_salesforce_request(
         request.date_from = request.date_from or date(request.year, 1, 1)
         request.date_to = request.date_to or date(request.year, 12, 31)
     return request
-

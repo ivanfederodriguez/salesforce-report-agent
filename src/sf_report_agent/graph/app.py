@@ -62,6 +62,7 @@ class ReportAgentRunner:
         return ExecutionResult(
             task_id=task_id,
             status=final_state["status"],
+            soql=final_state.get("soql", ""),
             row_count=int(final_state.get("quality_report", {}).get("row_count", 0)),
             artifacts=final_state.get("artifacts", []),
             response_text=final_state.get("response_text", ""),

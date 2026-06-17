@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,8 +53,16 @@ class ReportGraphNodes:
         snapshot = SchemaResolver(
             client, mapping_path=self.services.settings.field_mapping_path
         ).resolve()
+        mapping_dir = self.services.settings.artifacts_dir / "schema"
+        mapping_dir.mkdir(parents=True, exist_ok=True)
+        mapping_path = mapping_dir / "field_mapping.json"
+        mapping_path.write_text(
+            json.dumps(snapshot.get("field_mapping", {}), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         return {
             "schema_snapshot": snapshot,
+            "artifacts": [*state.get("artifacts", []), str(mapping_path)],
             "warnings": list(state.get("warnings", [])) + list(snapshot.get("warnings", [])),
             "status": "schema_resolved",
         }
@@ -71,7 +80,7 @@ class ReportGraphNodes:
         permission_path = doctor.save(report)
         return {
             "permission_report": report,
-            "artifacts": list(state.get("artifacts", [])) + [str(permission_path)],
+            "artifacts": [*state.get("artifacts", []), str(permission_path)],
             "warnings": list(state.get("warnings", [])) + report.warnings,
             "status": "permissions_checked",
         }
@@ -106,8 +115,10 @@ class ReportGraphNodes:
         if state.get("dry_run"):
             return {
                 "raw_records": [],
-                "warnings": list(state.get("warnings", []))
-                + ["Dry-run: no se ejecutó ninguna consulta contra Salesforce."],
+                "warnings": [
+                    *state.get("warnings", []),
+                    "Dry-run: no se ejecutó ninguna consulta contra Salesforce.",
+                ],
                 "status": "query_skipped_dry_run",
             }
         client = self.services.salesforce_client
@@ -122,8 +133,12 @@ class ReportGraphNodes:
         dataframe = records_to_dataframe(state.get("raw_records", []))
         if dataframe.empty:
             dataframe = pd.DataFrame(columns=state["report_plan"].selected_fields)
+        records = [
+            {str(key): value for key, value in record.items()}
+            for record in dataframe.to_dict(orient="records")
+        ]
         return {
-            "dataframe_records": dataframe.to_dict(orient="records"),
+            "dataframe_records": records,
             "dataframe_columns": [str(column) for column in dataframe.columns],
             "status": "dataset_transformed",
         }
@@ -248,4 +263,3 @@ class ReportGraphNodes:
             except Exception as exc:
                 warnings.append(f"El reporte terminó, pero no se actualizó la tarea fuente: {exc}")
         return {"status": status, "warnings": warnings}
-

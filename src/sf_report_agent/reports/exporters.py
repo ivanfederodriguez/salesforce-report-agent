@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ def export_report(
     task_id: int,
     title: str,
     artifacts_dir: Path,
-    output_formats: list[str],
+    output_formats: Sequence[str],
     metadata: dict[str, Any],
     warnings: list[str],
     generated_at: datetime | None = None,
@@ -76,4 +77,3 @@ def write_run_metadata(
     path = directory / f"task_{task_id}_{stamp}.json"
     path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return path
-

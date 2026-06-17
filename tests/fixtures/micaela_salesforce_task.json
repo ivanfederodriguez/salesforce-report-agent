@@ -1,0 +1,41 @@
+{
+  "id": 123,
+  "created_at": "2026-06-17T12:00:00+00:00",
+  "sender_label": "Micaela Magliola",
+  "conversation_label": "DM con Micaela Magliola",
+  "requested_action": "Armar un informe de altas en 2026 por campaña principal/campaña de origen, con datos personales y de donación, para las campañas indicadas en Salesforce.",
+  "public_request_text": "Campañas/fuentes solicitadas:\n* [IND] Campañas Pauta Digital\n* amplify\n* orgánico web\n* [IND] Redes Sociales\n* [IND] Redes Sociales - Instagram\n\nCampos requeridos:\nPersona:\n* nombre y apellido\n* fecha de nacimiento o edad\n* lugar de residencia\nDonación:\n* fecha establecida\n* estado\n* monto\n* fecha de finalización\n* campaña",
+  "category": "salesforce",
+  "priority": "medium",
+  "status": "new",
+  "classification_json": {
+    "summary": "Informe de altas 2026 por campaña",
+    "requested_action": "Armar un informe de altas 2026 para las campañas y fuentes detalladas."
+  },
+  "message_links": [
+    {
+      "channel_id": "D123",
+      "message_ts": "1718600000.000100",
+      "url": "https://example.lightning.force.com/lightning/r/Campaign/7011W000001buEh/view",
+      "url_type": "salesforce",
+      "title": "[IND] Campañas Pauta Digital",
+      "metadata_json": {"salesforce_object": "Campaign", "salesforce_id": "7011W000001buEh"}
+    },
+    {
+      "channel_id": "D123",
+      "message_ts": "1718600000.000100",
+      "url": "https://example.lightning.force.com/lightning/r/Campaign/701Pe00000VtQrK/view",
+      "url_type": "salesforce",
+      "title": "[IND] Redes Sociales",
+      "metadata_json": {"salesforce_object": "Campaign", "salesforce_id": "701Pe00000VtQrK"}
+    },
+    {
+      "channel_id": "D123",
+      "message_ts": "1718600000.000100",
+      "url": "https://example.lightning.force.com/lightning/r/Campaign/701Pe00000QysD4IAJ/view",
+      "url_type": "salesforce",
+      "title": "[IND] Redes Sociales - Instagram",
+      "metadata_json": {"salesforce_object": "Campaign", "salesforce_id": "701Pe00000QysD4IAJ"}
+    }
+  ]
+}

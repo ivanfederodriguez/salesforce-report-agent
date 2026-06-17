@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -91,14 +92,14 @@ class SchemaResolver:
 
     def _load_mapping(self) -> dict[str, Any]:
         if self.mapping_path is None:
-            return json.loads(json.dumps(DEFAULT_FIELD_MAPPING))
+            return deepcopy(DEFAULT_FIELD_MAPPING)
         try:
             payload = json.loads(self.mapping_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError(f"No se pudo leer FIELD_MAPPING_PATH={self.mapping_path}: {exc}") from exc
         if not isinstance(payload, dict) or "donation" not in payload:
             raise ValueError("El field mapping debe ser un objeto con una sección 'donation'")
-        return payload
+        return dict(payload)
 
 
 def _object_field_names(snapshot: dict[str, Any], object_name: str) -> set[str]:
@@ -107,6 +108,15 @@ def _object_field_names(snapshot: dict[str, Any], object_name: str) -> set[str]:
         for field in snapshot.get("objects", {}).get(object_name, {}).get("fields", [])
         if field.get("name")
     }
+
+
+def _mapped_value(mapping: dict[str, Any], semantic_name: str) -> Any:
+    aliases = {
+        "fecha_nacimiento_o_edad": "fecha_nacimiento",
+        "lugar_de_residencia": "residencia",
+        "fecha_de_finalizacion": "fecha_finalizacion",
+    }
+    return mapping.get(semantic_name, mapping.get(aliases.get(semantic_name, "")))
 
 
 def build_report_plan(
@@ -118,11 +128,11 @@ def build_report_plan(
     primary_object = str(donation.get("object") or "Opportunity")
     donation_mapping = donation.get("fields", {})
     selected = ["Id"]
-    warnings = list(snapshot.get("warnings", []))
+    warnings: list[str] = []
     available = _object_field_names(snapshot, primary_object)
 
     for semantic_name in request.donation_fields:
-        api_value = donation_mapping.get(semantic_name)
+        api_value = _mapped_value(donation_mapping, semantic_name)
         if api_value is None:
             warnings.append(f"Sin mapping Salesforce para el campo de donación '{semantic_name}'.")
             continue
@@ -144,7 +154,7 @@ def build_report_plan(
     if request.person_fields and person_prefix:
         person_mapping = mapping.get("person", {}).get("fields", {})
         for semantic_name in request.person_fields:
-            api_value = person_mapping.get(semantic_name)
+            api_value = _mapped_value(person_mapping, semantic_name)
             if api_value is None:
                 warnings.append(f"Sin mapping Salesforce para el campo personal '{semantic_name}'.")
                 continue
@@ -156,14 +166,23 @@ def build_report_plan(
             "los campos personales requieren mapping manual."
         )
 
-    needs_clarification = primary_object not in snapshot.get("objects", {}) and not snapshot.get(
-        "offline"
-    )
-    questions = (
-        [f"¿Qué objeto contiene las altas/donaciones? '{primary_object}' no está accesible."]
-        if needs_clarification
-        else []
-    )
+    questions: list[str] = []
+    if not snapshot.get("offline") and primary_object not in snapshot.get("objects", {}):
+        questions.append(
+            f"¿Qué objeto contiene las altas/donaciones? '{primary_object}' no está accesible."
+        )
+    if primary_object not in {"Opportunity", "CampaignMember"}:
+        questions.append(
+            f"El objeto {primary_object} requiere definir explícitamente sus campos de campaña y fecha."
+        )
+    if available and "CampaignId" not in available:
+        questions.append(f"{primary_object} no expone CampaignId para filtrar las campañas.")
+    required_date_field = "CreatedDate" if primary_object == "CampaignMember" else "CloseDate"
+    if request.year and available and required_date_field not in available:
+        questions.append(
+            f"{primary_object} no expone {required_date_field} para filtrar el año {request.year}."
+        )
+    needs_clarification = bool(questions)
     title = f"Altas {request.year or ''} por campaña".strip()
     return SalesforceReportPlan(
         task_id=request.task_id,
@@ -183,4 +202,3 @@ def build_report_plan(
         needs_clarification=needs_clarification,
         clarification_questions=questions,
     )
-
