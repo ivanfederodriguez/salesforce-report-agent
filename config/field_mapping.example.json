@@ -1,0 +1,20 @@
+{
+  "person": {
+    "object": "Contact",
+    "fields": {
+      "nombre_y_apellido": "Name",
+      "fecha_nacimiento": "Birthdate",
+      "residencia": ["MailingCity", "MailingState", "MailingCountry"]
+    }
+  },
+  "donation": {
+    "object": "Opportunity",
+    "fields": {
+      "fecha_establecida": "CloseDate",
+      "estado": "StageName",
+      "monto": "Amount",
+      "fecha_finalizacion": null,
+      "campaña": "CampaignId"
+    }
+  }
+}
