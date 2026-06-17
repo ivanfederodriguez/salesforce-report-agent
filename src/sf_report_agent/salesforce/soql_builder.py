@@ -27,6 +27,10 @@ class SOQLBuilder:
             raise ValueError(f"Campaign ID inválido: {value!r}")
         return value
 
+    @staticmethod
+    def _literal(value: str) -> str:
+        return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
     def build(
         self,
         plan: SalesforceReportPlan,
@@ -40,13 +44,25 @@ class SOQLBuilder:
             fields.insert(0, "Id")
 
         campaign_ids = [self._campaign_id(value) for value in request.campaign_ids]
-        if not campaign_ids:
-            raise ValueError("No hay Campaign IDs válidos para construir SOQL")
         campaign_field = "CampaignId"
         if primary_object == "CampaignMember":
             campaign_field = "CampaignId"
-        quoted_ids = ", ".join(f"'{value}'" for value in campaign_ids)
-        filters = [f"{campaign_field} IN ({quoted_ids})"]
+        scope_filters: list[str] = []
+        if campaign_ids:
+            quoted_ids = ", ".join(f"'{value}'" for value in campaign_ids)
+            scope_filters.append(f"{campaign_field} IN ({quoted_ids})")
+        if request.origin_sources:
+            if not plan.origin_source_field:
+                raise ValueError("Falta el mapping del campo de campaña de origen/fuente")
+            origin_field = self._api_name(plan.origin_source_field)
+            quoted_sources = ", ".join(self._literal(value) for value in request.origin_sources)
+            scope_filters.append(f"{origin_field} IN ({quoted_sources})")
+        if not scope_filters:
+            raise ValueError("No hay campañas ni fuentes de origen para construir SOQL")
+        scope = (
+            scope_filters[0] if len(scope_filters) == 1 else "(" + " OR ".join(scope_filters) + ")"
+        )
+        filters = [scope]
 
         if request.year is not None:
             date_field = "CreatedDate" if primary_object == "CampaignMember" else "CloseDate"
@@ -60,4 +76,3 @@ class SOQLBuilder:
         )
         validate_soql(soql, max_rows=self.max_rows)
         return soql
-

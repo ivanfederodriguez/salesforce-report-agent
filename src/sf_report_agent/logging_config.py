@@ -8,4 +8,3 @@ def configure_logging(*, verbose: bool = False) -> None:
     )
     for noisy_logger in ("urllib3", "simple_salesforce"):
         logging.getLogger(noisy_logger).setLevel(logging.WARNING)
-

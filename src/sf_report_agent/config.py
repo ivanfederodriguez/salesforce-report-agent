@@ -37,13 +37,16 @@ class Settings:
     require_human_approval_for_pii: bool
     log_pii: bool
     update_source_task: bool
+    allow_report_without_person_fields: bool = False
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> Settings:
         load_dotenv(dotenv_path=env_file, override=False)
         mapping_value = os.getenv("FIELD_MAPPING_PATH", "").strip()
         settings = cls(
-            source_db_path=Path(os.getenv("SOURCE_DB_PATH", "../slack-automatizacion/slack_agent.db")),
+            source_db_path=Path(
+                os.getenv("SOURCE_DB_PATH", "../slack-automatizacion/slack_agent.db")
+            ),
             worker_db_path=Path(os.getenv("WORKER_DB_PATH", "salesforce_report_agent.db")),
             artifacts_dir=Path(os.getenv("ARTIFACTS_DIR", "artifacts")),
             field_mapping_path=Path(mapping_value) if mapping_value else None,
@@ -62,6 +65,9 @@ class Settings:
             ),
             log_pii=_as_bool(os.getenv("LOG_PII"), False),
             update_source_task=_as_bool(os.getenv("UPDATE_SOURCE_TASK"), False),
+            allow_report_without_person_fields=_as_bool(
+                os.getenv("ALLOW_REPORT_WITHOUT_PERSON_FIELDS"), False
+            ),
         )
         settings.validate()
         return settings
@@ -77,8 +83,5 @@ class Settings:
     @property
     def has_salesforce_credentials(self) -> bool:
         return bool(
-            self.salesforce_username
-            and self.salesforce_password
-            and self.salesforce_security_token
+            self.salesforce_username and self.salesforce_password and self.salesforce_security_token
         )
-

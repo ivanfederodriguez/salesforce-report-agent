@@ -20,8 +20,10 @@ def validate_report_plan(plan: SalesforceReportPlan) -> list[str]:
         errors.append("Objeto principal inválido")
     if not plan.selected_fields:
         errors.append("El plan no tiene campos seleccionados")
-    if not plan.campaign_ids:
-        errors.append("El plan no tiene Campaign IDs")
+    if not plan.campaign_ids and not plan.origin_sources:
+        errors.append("El plan no tiene campañas ni fuentes de origen")
+    if plan.origin_sources and not plan.origin_source_field:
+        errors.append("El plan no tiene mapping para campaña de origen/fuente")
     return errors
 
 
@@ -39,4 +41,3 @@ def validate_soql(soql: str, *, max_rows: int, require_limit: bool = True) -> No
         raise UnsafeSOQLError("La consulta debe contener exactamente un LIMIT")
     if limits and int(limits[0]) > max_rows:
         raise UnsafeSOQLError(f"LIMIT excede MAX_EXPORT_ROWS={max_rows}")
-

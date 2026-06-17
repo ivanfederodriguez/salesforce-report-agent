@@ -15,4 +15,3 @@ class ExternalTask(BaseModel):
     status: str | None = None
     classification_json: dict[str, Any] = Field(default_factory=dict)
     message_links: list[dict[str, Any]] = Field(default_factory=list)
-

@@ -103,6 +103,39 @@ def create_source_database(path: Path, task: ExternalTask) -> None:
             )
 
 
+def write_field_mapping(
+    path: Path,
+    *,
+    include_relationship: bool = True,
+    include_origin: bool = True,
+) -> Path:
+    payload: dict[str, Any] = {
+        "person": {
+            "object": "Contact",
+            "fields": {
+                "nombre_y_apellido": "Name",
+                "fecha_nacimiento_o_edad": "Birthdate",
+                "lugar_de_residencia": ["MailingCity", "MailingState", "MailingCountry"],
+            },
+        },
+        "donation": {
+            "object": "Opportunity",
+            "fields": {
+                "fecha_establecida": "CloseDate",
+                "estado": "StageName",
+                "monto": "Amount",
+                "fecha_de_finalizacion": "EndDate__c",
+                "campaña": "CampaignId",
+                "campaña_origen": "LeadSource" if include_origin else None,
+            },
+        },
+    }
+    if include_relationship:
+        payload["relationships"] = {"person_from_donation": "Contact"}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 class FakeSalesforceClient:
     username = "report-user@example.org"
     instance_url = "https://example.my.salesforce.com"
@@ -139,12 +172,30 @@ class FakeSalesforceClient:
                 "OtherState",
                 "OtherCountry",
             ],
-            "Opportunity": ["Amount", "StageName", "CloseDate", "CampaignId"],
+            "Opportunity": [
+                "Amount",
+                "StageName",
+                "CloseDate",
+                "CampaignId",
+                "LeadSource",
+                "ContactId",
+                "EndDate__c",
+            ],
         }
         names = common + object_fields.get(object_name, [])
         return {
             "fields": [
-                {"name": name, "label": name, "type": "string", "referenceTo": []}
+                {
+                    "name": name,
+                    "label": name,
+                    "type": "reference" if name in {"CampaignId", "ContactId"} else "string",
+                    "referenceTo": ["Campaign"]
+                    if name == "CampaignId"
+                    else (["Contact"] if name == "ContactId" else []),
+                    "relationshipName": "Campaign"
+                    if name == "CampaignId"
+                    else ("Contact" if name == "ContactId" else None),
+                }
                 for name in names
             ]
         }
@@ -153,7 +204,9 @@ class FakeSalesforceClient:
         return True
 
     def get_campaigns_by_ids(self, campaign_ids: list[str]) -> list[dict[str, Any]]:
-        return [{"Id": value, "Name": f"Campaign {index}"} for index, value in enumerate(campaign_ids)]
+        return [
+            {"Id": value, "Name": f"Campaign {index}"} for index, value in enumerate(campaign_ids)
+        ]
 
     def query_all(self, soql: str) -> list[dict[str, Any]]:
         self.queried_soql.append(soql)
@@ -165,6 +218,15 @@ class FakeSalesforceClient:
                 "StageName": "Activa",
                 "Amount": 1500,
                 "CampaignId": self.campaign_ids[0],
+                "LeadSource": "amplify",
+                "EndDate__c": None,
+                "Contact": {
+                    "Name": "Persona Uno",
+                    "Birthdate": "1990-01-01",
+                    "MailingCity": "Córdoba",
+                    "MailingState": "Córdoba",
+                    "MailingCountry": "Argentina",
+                },
             },
             {
                 "attributes": {"type": "Opportunity"},
@@ -173,6 +235,15 @@ class FakeSalesforceClient:
                 "StageName": "Activa",
                 "Amount": 2000,
                 "CampaignId": self.campaign_ids[1],
+                "LeadSource": "orgánico web",
+                "EndDate__c": None,
+                "Contact": {
+                    "Name": "Persona Dos",
+                    "Birthdate": "1985-05-10",
+                    "MailingCity": "Rosario",
+                    "MailingState": "Santa Fe",
+                    "MailingCountry": "Argentina",
+                },
             },
         ]
 

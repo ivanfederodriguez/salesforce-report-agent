@@ -54,4 +54,3 @@ class OllamaClient:
         if not isinstance(parsed, dict):
             raise OllamaError("Ollama devolvió JSON que no es un objeto")
         return parsed
-

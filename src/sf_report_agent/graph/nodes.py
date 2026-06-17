@@ -86,7 +86,13 @@ class ReportGraphNodes:
         }
 
     def build_report_plan(self, state: ReportAgentState) -> ReportAgentState:
-        plan = build_report_plan(state["request"], state["schema_snapshot"])
+        plan = build_report_plan(
+            state["request"],
+            state["schema_snapshot"],
+            allow_report_without_person_fields=(
+                self.services.settings.allow_report_without_person_fields
+            ),
+        )
         return {
             "report_plan": plan,
             "warnings": list(state.get("warnings", [])) + plan.warnings,
@@ -96,7 +102,7 @@ class ReportGraphNodes:
     def validate_plan(self, state: ReportAgentState) -> ReportAgentState:
         errors = validate_report_plan(state["report_plan"])
         if state["report_plan"].needs_clarification:
-            errors.extend(state["report_plan"].clarification_questions)
+            return {"status": "plan_needs_clarification"}
         if errors:
             raise ValueError("Plan inválido: " + " ".join(errors))
         return {"status": "plan_validated"}
@@ -179,9 +185,11 @@ class ReportGraphNodes:
             metadata=metadata,
             generated_at=generated_at,
         )
-        all_paths = list(state.get("artifacts", [])) + [str(path) for path in report_paths] + [
-            str(run_path)
-        ]
+        all_paths = (
+            list(state.get("artifacts", []))
+            + [str(path) for path in report_paths]
+            + [str(run_path)]
+        )
         csv_path = next((str(path) for path in report_paths if path.suffix == ".csv"), "")
         return {
             "artifacts": all_paths,
@@ -200,6 +208,8 @@ class ReportGraphNodes:
             "soql": state["soql"],
             "row_count": state["quality_report"]["row_count"],
             "campaign_ids": state["request"].campaign_ids,
+            "campaign_names": state["request"].campaign_names,
+            "origin_sources": state["request"].origin_sources,
             "report_title": state["report_plan"].title,
             "warnings": state.get("warnings", []),
             "field_mapping_used": mapping,
@@ -208,35 +218,89 @@ class ReportGraphNodes:
         }
 
     def compose_response(self, state: ReportAgentState) -> ReportAgentState:
+        request = state["request"]
+        plan = state["report_plan"]
         quality = state["quality_report"]
         artifacts = [Path(path) for path in state.get("artifacts", [])]
-        csv_path = next((path for path in artifacts if path.suffix == ".csv"), None)
-        xlsx_path = next((path for path in artifacts if path.suffix == ".xlsx"), None)
         warnings = list(dict.fromkeys(state.get("warnings", [])))
+
+        if request.report_type == "altas_por_campaña":
+            report_name = "informe de altas"
+        else:
+            report_name = "informe de " + request.report_type.replace("_", " ").strip()
+        if request.year:
+            report_name += f" {request.year}"
+
         lines = [
-            "Listo. Armé el informe de altas 2026 para las campañas solicitadas.",
-            "Incluye:",
-            "- datos personales: nombre y apellido, fecha de nacimiento/edad y residencia;",
-            "- datos de donación: fecha establecida, estado, monto, fecha de finalización y campaña.",
-            "Resultado:",
-            f"- filas exportadas: {quality['row_count']}",
-            "- campañas encontradas: " + (", ".join(quality["campaigns_found"]) or "ninguna"),
-            f"- archivo CSV: {csv_path or 'no generado'}",
-            f"- archivo XLSX: {xlsx_path or 'no generado'}",
+            f"Listo. Armé el {report_name}.",
+            f"Plan ejecutado: {plan.title}.",
         ]
+        campaign_scope = request.campaign_names or request.campaign_ids
+        if campaign_scope:
+            lines.append("Campañas solicitadas: " + ", ".join(campaign_scope) + ".")
+        if request.origin_sources:
+            lines.append("Fuentes de origen: " + ", ".join(request.origin_sources) + ".")
+        lines.extend(
+            [
+                "Resultado:",
+                f"- filas exportadas: {quality['row_count']}",
+                "- campañas encontradas: " + (", ".join(quality["campaigns_found"]) or "ninguna"),
+                "- campos exportados: "
+                + (", ".join(str(value) for value in quality.get("columns", [])) or "ninguno"),
+            ]
+        )
+        if artifacts:
+            lines.append("Artifacts:")
+            lines.extend(f"- {path.suffix.lstrip('.') or 'archivo'}: {path}" for path in artifacts)
+        else:
+            lines.append("Artifacts: no se generaron archivos.")
         if warnings:
             lines.append("Advertencias:")
             lines.extend(f"- {warning}" for warning in warnings)
         if self.services.settings.require_human_approval_for_pii:
-            lines.append("El envío requiere aprobación humana porque el informe puede contener PII.")
+            lines.append(
+                "El envío requiere aprobación humana porque el informe puede contener PII."
+            )
         if state.get("dry_run"):
             lines.insert(0, "Dry-run completado; Salesforce no fue consultado.")
         return {"response_text": "\n".join(lines), "status": "response_composed"}
 
+    def compose_clarification_response(self, state: ReportAgentState) -> ReportAgentState:
+        request = state["request"]
+        plan = state["report_plan"]
+        questions = list(dict.fromkeys(plan.clarification_questions))
+        warnings = list(dict.fromkeys(state.get("warnings", [])))
+        lines = [
+            f'Necesito una aclaración antes de ejecutar el reporte "{plan.title}".',
+            "No ejecuté la consulta del reporte ni generé una exportación.",
+        ]
+        scope = request.campaign_names or request.campaign_ids
+        if scope:
+            lines.append("Campañas identificadas: " + ", ".join(scope) + ".")
+        if request.origin_sources:
+            lines.append("Fuentes identificadas: " + ", ".join(request.origin_sources) + ".")
+        lines.append("Preguntas para Iván:")
+        lines.extend(f"- {question}" for question in questions)
+        if warnings:
+            lines.append("Advertencias de schema/mapping:")
+            lines.extend(f"- {warning}" for warning in warnings)
+        return {
+            "response_text": "\n".join(lines),
+            "status": "clarification_response_composed",
+        }
+
     def persist_result(self, state: ReportAgentState) -> ReportAgentState:
         dry_run = state.get("dry_run", False)
-        status = "dry_run_completed" if dry_run else "done_pending_approval"
-        if not dry_run and not self.services.settings.require_human_approval_for_pii:
+        if state["report_plan"].needs_clarification:
+            status = "needs_clarification"
+        elif dry_run:
+            status = "dry_run_completed"
+        else:
+            status = "done_pending_approval"
+        if (
+            status == "done_pending_approval"
+            and not self.services.settings.require_human_approval_for_pii
+        ):
             status = "done_pending_reply"
         repository = self.services.run_repository
         repository.finish_run(
@@ -245,9 +309,10 @@ class ReportGraphNodes:
             request=state["request"],
             plan=state["report_plan"],
             permission_report=state.get("permission_report"),
-            soql=state["soql"],
-            row_count=state["quality_report"]["row_count"],
+            soql=state.get("soql"),
+            row_count=state.get("quality_report", {}).get("row_count"),
             response_text=state["response_text"],
+            warnings=list(state.get("warnings", [])),
         )
         for raw_path in state.get("artifacts", []):
             path = Path(raw_path)
@@ -255,7 +320,10 @@ class ReportGraphNodes:
                 state["run_id"], state["task_id"], path.suffix.lstrip(".") or "artifact", path
             )
         warnings = list(state.get("warnings", []))
-        if not dry_run and self.services.settings.update_source_task:
+        if (
+            status in {"done_pending_approval", "done_pending_reply"}
+            and self.services.settings.update_source_task
+        ):
             try:
                 mark_source_task_done_pending_reply(
                     self.services.settings.source_db_path, state["task_id"]

@@ -11,9 +11,7 @@ def mark_source_task_done_pending_reply(db_path: Path, task_id: int) -> None:
     if not db_path.exists():
         raise SourceDatabaseError(f"No existe la SQLite fuente: {db_path}")
     with sqlite3.connect(db_path) as connection:
-        columns = {
-            str(row[1]) for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
-        }
+        columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(tasks)").fetchall()}
         if "status" not in columns:
             raise SourceDatabaseError("No se puede actualizar la fuente: tasks.status no existe")
         cursor = connection.execute(
@@ -21,4 +19,3 @@ def mark_source_task_done_pending_reply(db_path: Path, task_id: int) -> None:
         )
         if cursor.rowcount != 1:
             raise SourceDatabaseError(f"No se encontró task id={task_id} para actualizar")
-

@@ -86,7 +86,9 @@ def parse_salesforce_request(
     year = years[0] if years else None
     person_fields = _detect_fields(text, PERSON_FIELD_ALIASES)
     donation_fields = _detect_fields(text, DONATION_FIELD_ALIASES)
-    report_type = "altas_por_campaña" if "alta" in folded and "campan" in folded else "reporte_salesforce"
+    report_type = (
+        "altas_por_campaña" if "alta" in folded and "campan" in folded else "reporte_salesforce"
+    )
 
     missing: list[str] = []
     if not campaign_ids and not campaign_names:

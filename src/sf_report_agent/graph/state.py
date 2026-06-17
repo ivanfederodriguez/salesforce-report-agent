@@ -28,4 +28,3 @@ class ReportAgentState(TypedDict, total=False):
     dataframe_records: list[dict[str, Any]]
     dataframe_columns: list[str]
     quality_report: dict[str, Any]
-

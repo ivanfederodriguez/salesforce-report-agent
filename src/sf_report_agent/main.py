@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Protocol, TypedDict
 
 from rich.console import Console
 from rich.table import Table
@@ -20,6 +23,17 @@ from sf_report_agent.salesforce.client import SalesforceClient, SalesforceClient
 from sf_report_agent.salesforce.permissions_doctor import SalesforcePermissionsDoctor
 
 console = Console()
+
+
+class SalesforceDescriber(Protocol):
+    def describe_object(self, object_name: str) -> dict[str, Any]: ...
+
+
+class SchemaField(TypedDict):
+    label: str
+    name: str
+    type: str
+    referenceTo: list[str]
 
 
 def _ollama(settings: Settings) -> OllamaClient:
@@ -78,9 +92,7 @@ def command_doctor(settings: Settings) -> int:
 
     try:
         tags = _ollama(settings).health()
-        installed = {
-            str(item.get("name") or item.get("model")) for item in tags.get("models", [])
-        }
+        installed = {str(item.get("name") or item.get("model")) for item in tags.get("models", [])}
         model_ok = settings.ollama_model in installed
         detail = (
             settings.ollama_model
@@ -111,6 +123,77 @@ def command_sf_doctor(settings: Settings) -> int:
     return 0 if report.login_ok and report.api_ok and report.describe_global_ok else 1
 
 
+def command_inspect_schema(
+    settings: Settings,
+    *,
+    object_name: str,
+    filter_text: str | None = None,
+    client: SalesforceDescriber | None = None,
+) -> int:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", object_name):
+        raise ValueError(f"Nombre de objeto Salesforce inválido: {object_name!r}")
+    describer = client or _salesforce(settings)
+    description = describer.describe_object(object_name)
+    visible_fields: list[SchemaField] = [
+        {
+            "label": str(field.get("label") or field.get("name") or ""),
+            "name": str(field.get("name") or ""),
+            "type": str(field.get("type") or ""),
+            "referenceTo": [str(value) for value in (field.get("referenceTo") or [])],
+        }
+        for field in (description.get("fields") or [])
+        if isinstance(field, dict)
+        and field.get("name")
+        and field.get("accessible", True) is not False
+    ]
+    needle = (filter_text or "").casefold().strip()
+    matching_fields = [
+        field
+        for field in visible_fields
+        if not needle
+        or needle
+        in " ".join(
+            [
+                field["label"],
+                field["name"],
+                field["type"],
+                *field["referenceTo"],
+            ]
+        ).casefold()
+    ]
+
+    generated_at = datetime.now(UTC)
+    schema_dir = settings.artifacts_dir / "schema"
+    schema_dir.mkdir(parents=True, exist_ok=True)
+    stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
+    path = schema_dir / f"{object_name}_describe_{stamp}.json"
+    payload = {
+        "object": object_name,
+        "generated_at": generated_at.isoformat(),
+        "filter": filter_text,
+        "visible_field_count": len(visible_fields),
+        "matched_field_count": len(matching_fields),
+        "fields": matching_fields,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    table = Table(title=f"Schema visible: {object_name}")
+    table.add_column("Label")
+    table.add_column("API name")
+    table.add_column("Type")
+    table.add_column("referenceTo")
+    for field in matching_fields:
+        table.add_row(
+            field["label"],
+            field["name"],
+            field["type"],
+            ", ".join(field["referenceTo"]),
+        )
+    console.print(table)
+    console.print(f"Describe guardado en: {path}")
+    return 0
+
+
 def command_list_tasks(settings: Settings, *, limit: int) -> int:
     tasks = TaskReader(settings.source_db_path).list_tasks(limit=limit)
     table = Table(title=f"Tareas ({len(tasks)})")
@@ -131,9 +214,7 @@ def command_list_tasks(settings: Settings, *, limit: int) -> int:
 
 
 def _run_task(settings: Settings, task_id: int, *, dry_run: bool) -> int:
-    result = ReportAgentRunner(_services(settings, dry_run=dry_run)).run(
-        task_id, dry_run=dry_run
-    )
+    result = ReportAgentRunner(_services(settings, dry_run=dry_run)).run(task_id, dry_run=dry_run)
     console.print(result.response_text)
     console.print("\n[bold]SOQL y auditoría:[/bold]")
     console.print_json(json.dumps(result.model_dump(mode="json"), ensure_ascii=False))
@@ -155,6 +236,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("doctor", help="Valida entorno local, SQLite y Ollama")
     subparsers.add_parser("sf-doctor", help="Diagnostica permisos read-only de Salesforce")
+    inspect_parser = subparsers.add_parser(
+        "inspect-schema", help="Lista campos visibles de un objeto Salesforce"
+    )
+    inspect_parser.add_argument("--object", dest="object_name", required=True)
+    inspect_parser.add_argument("--filter", dest="filter_text", default=None)
     list_parser = subparsers.add_parser("list-tasks", help="Lista tareas de la SQLite fuente")
     list_parser.add_argument("--limit", type=int, default=20)
     run_parser = subparsers.add_parser("run-task", help="Ejecuta una tarea por ID")
@@ -175,13 +261,25 @@ def main(argv: Sequence[str] | None = None) -> int:
             return command_doctor(settings)
         if args.command == "sf-doctor":
             return command_sf_doctor(settings)
+        if args.command == "inspect-schema":
+            return command_inspect_schema(
+                settings,
+                object_name=args.object_name,
+                filter_text=args.filter_text,
+            )
         if args.command == "list-tasks":
             return command_list_tasks(settings, limit=args.limit)
         if args.command == "run-task":
             return _run_task(settings, args.task_id, dry_run=args.dry_run)
         if args.command == "run-once":
             return command_run_once(settings, dry_run=args.dry_run)
-    except (SourceDatabaseError, SalesforceClientError, OllamaError, ValueError, RuntimeError) as exc:
+    except (
+        SourceDatabaseError,
+        SalesforceClientError,
+        OllamaError,
+        ValueError,
+        RuntimeError,
+    ) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         return 1
     parser.error("Comando desconocido")

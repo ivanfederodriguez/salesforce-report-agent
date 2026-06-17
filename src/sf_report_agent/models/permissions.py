@@ -24,4 +24,3 @@ class SalesforcePermissionReport(BaseModel):
     campaign_id_checks: dict[str, bool] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     recommended_salesforce_permissions: list[str] = Field(default_factory=list)
-

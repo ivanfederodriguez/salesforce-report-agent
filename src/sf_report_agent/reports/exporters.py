@@ -23,7 +23,11 @@ def _slug(value: str) -> str:
 def _metadata_rows(metadata: dict[str, Any]) -> pd.DataFrame:
     rows = []
     for key, value in metadata.items():
-        rendered = json.dumps(value, ensure_ascii=False, default=str) if isinstance(value, (dict, list)) else value
+        rendered = (
+            json.dumps(value, ensure_ascii=False, default=str)
+            if isinstance(value, (dict, list))
+            else value
+        )
         rows.append({"campo": key, "valor": rendered})
     return pd.DataFrame(rows)
 
@@ -75,5 +79,7 @@ def write_run_metadata(
     directory.mkdir(parents=True, exist_ok=True)
     stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
     path = directory / f"task_{task_id}_{stamp}.json"
-    path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    path.write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+    )
     return path

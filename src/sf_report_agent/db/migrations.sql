@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS report_runs (
     soql TEXT,
     row_count INTEGER,
     response_text TEXT,
+    warnings_json TEXT,
     error TEXT
 );
 
@@ -22,4 +23,3 @@ CREATE TABLE IF NOT EXISTS report_artifacts (
     created_at TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES report_runs(id)
 );
-

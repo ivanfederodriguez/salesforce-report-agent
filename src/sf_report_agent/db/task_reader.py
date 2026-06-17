@@ -147,4 +147,3 @@ class TaskReader:
             classification_json=classification,
             message_links=parsed_links,
         )
-

@@ -78,7 +78,9 @@ El resolver describe objetos candidatos y solo usa campos visibles. El ejemplo e
 FIELD_MAPPING_PATH=config/field_mapping.json
 ```
 
-Un valor `null` produce una advertencia; el agente no inventa campos. Los datos personales sobre un objeto de donación solo se agregan cuando el mapping incluye una relación inequívoca, por ejemplo:
+Un valor `null` produce una advertencia y, si el campo fue solicitado, una aclaración; el agente no inventa campos. Las fuentes de origen también requieren mapping explícito, por ejemplo `"campaña_origen": "LeadSource"` dentro de `donation.fields`.
+
+Los datos personales sobre un objeto de donación solo se agregan cuando el mapping incluye una relación inequívoca, por ejemplo:
 
 ```json
 {
@@ -88,6 +90,8 @@ Un valor `null` produce una advertencia; el agente no inventa campos. Los datos 
 }
 ```
 
+Según el modelo de la org, `person_from_donation` podría ser `npsp__Primary_Contact__r`, `Contact` u otra relación custom. Confirmala con `inspect-schema`; no es un nombre universal. Con `ALLOW_REPORT_WITHOUT_PERSON_FIELDS=false` (default), si el pedido requiere datos personales y la relación falta o no es visible, la corrida termina en `needs_clarification` con preguntas para Iván. En `true`, el reporte puede continuar sin esos campos y deja una advertencia.
+
 ## CLI
 
 Con el entorno virtual activo:
@@ -95,6 +99,8 @@ Con el entorno virtual activo:
 ```bash
 python -m sf_report_agent.main doctor
 python -m sf_report_agent.main sf-doctor
+python -m sf_report_agent.main inspect-schema --object Opportunity
+python -m sf_report_agent.main inspect-schema --object Contact --filter campaign
 python -m sf_report_agent.main list-tasks --limit 20
 python -m sf_report_agent.main run-task --task-id 123 --dry-run
 python -m sf_report_agent.main run-task --task-id 123
@@ -104,6 +110,8 @@ python -m sf_report_agent.main run-once
 
 `doctor` valida SQLite, DB propia, artifacts, Ollama y presencia del modelo. `sf-doctor` intenta login, `describe`, `SELECT ... LIMIT 1`, campos visibles y las tres Campaign IDs del fixture; guarda el resultado en `artifacts/permission_reports/`.
 
+`inspect-schema` lista label, API name, tipo y `referenceTo` de los campos visibles. Guarda cada inspección en `artifacts/schema/<object>_describe_<timestamp>.json`.
+
 El dry-run no crea cliente Salesforce: interpreta, planifica, valida y exporta un dataset vacío con SOQL limitado a 200 filas. Una ejecución real exige credenciales y limita la exportación a `MAX_EXPORT_ROWS`.
 
 ## Flujo LangGraph
@@ -111,7 +119,8 @@ El dry-run no crea cliente Salesforce: interpreta, planifica, valida y exporta u
 ```text
 START -> load_task -> parse_request -> resolve_salesforce_schema
       -> check_permissions -> build_report_plan -> validate_plan
-      -> build_soql -> validate_soql -> execute_query
+      -> [needs_clarification] compose_clarification_response -> persist_result
+      -> [valid] build_soql -> validate_soql -> execute_query
       -> transform_dataset -> quality_checks -> export_report
       -> compose_response -> persist_result -> END
 ```
@@ -131,6 +140,7 @@ El XLSX contiene `datos`, `metadata` y, cuando corresponde, `warnings`.
 - Los Campaign IDs y nombres de API se validan antes de construir SOQL.
 - `LOG_PII=false` evita dumps de registros; ninguna contraseña o token entra en logs/metadata.
 - `REQUIRE_HUMAN_APPROVAL_FOR_PII=true` deja el resultado como `done_pending_approval`.
+- `ALLOW_REPORT_WITHOUT_PERSON_FIELDS=false` evita generar silenciosamente un reporte incompleto.
 - `UPDATE_SOURCE_TASK=false` mantiene la SQLite fuente intacta.
 - Nunca hay envío automático a Slack.
 

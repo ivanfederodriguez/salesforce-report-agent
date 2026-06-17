@@ -14,7 +14,11 @@
       "estado": "StageName",
       "monto": "Amount",
       "fecha_finalizacion": null,
-      "campaña": "CampaignId"
+      "campaña": "CampaignId",
+      "campaña_origen": "LeadSource"
     }
+  },
+  "relationships": {
+    "person_from_donation": "Contact"
   }
 }

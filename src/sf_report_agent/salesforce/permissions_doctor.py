@@ -178,7 +178,9 @@ class SalesforcePermissionsDoctor:
                 "Hacer visibles por Field-Level Security los campos personales y de donación necesarios."
             )
         if not all(campaigns.values()):
-            recommendations.append("Conceder acceso de lectura a los registros de campañas indicados.")
+            recommendations.append(
+                "Conceder acceso de lectura a los registros de campañas indicados."
+            )
         recommendations.append("No conceder permisos de escritura: el MVP solo requiere lectura.")
         return list(dict.fromkeys(recommendations))
 

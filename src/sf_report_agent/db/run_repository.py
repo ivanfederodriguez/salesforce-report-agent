@@ -6,6 +6,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+FINAL_STATUSES = {
+    "dry_run_completed",
+    "done_pending_approval",
+    "done_pending_reply",
+    "needs_clarification",
+    "failed",
+}
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -30,6 +38,12 @@ class ReportRunRepository:
         with sqlite3.connect(self.db_path) as connection:
             connection.execute("PRAGMA foreign_keys = ON")
             connection.executescript(migration)
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(report_runs)").fetchall()
+            }
+            if "warnings_json" not in columns:
+                connection.execute("ALTER TABLE report_runs ADD COLUMN warnings_json TEXT")
 
     def start_run(self, task_id: int) -> int:
         self.initialize()
@@ -53,14 +67,18 @@ class ReportRunRepository:
         soql: str | None = None,
         row_count: int | None = None,
         response_text: str | None = None,
+        warnings: list[str] | None = None,
         error: str | None = None,
     ) -> None:
+        if status not in FINAL_STATUSES:
+            raise ValueError(f"Status final de corrida no soportado: {status}")
         with sqlite3.connect(self.db_path) as connection:
             connection.execute(
                 """
                 UPDATE report_runs
                 SET finished_at = ?, status = ?, request_json = ?, plan_json = ?,
-                    permission_report_json = ?, soql = ?, row_count = ?, response_text = ?, error = ?
+                    permission_report_json = ?, soql = ?, row_count = ?, response_text = ?,
+                    warnings_json = ?, error = ?
                 WHERE id = ?
                 """,
                 (
@@ -72,6 +90,7 @@ class ReportRunRepository:
                     soql,
                     row_count,
                     response_text,
+                    _json(warnings or []),
                     error,
                     run_id,
                 ),

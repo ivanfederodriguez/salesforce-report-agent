@@ -29,7 +29,9 @@ class SalesforceClient:
                 domain=domain,
             )
         except Exception as exc:
-            raise SalesforceClientError(f"No fue posible iniciar sesión en Salesforce: {exc}") from exc
+            raise SalesforceClientError(
+                f"No fue posible iniciar sesión en Salesforce: {exc}"
+            ) from exc
         self.username = username
 
     @property

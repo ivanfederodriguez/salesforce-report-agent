@@ -22,4 +22,3 @@ def _flatten(value: Any, *, prefix: str = "") -> dict[str, Any]:
 
 def records_to_dataframe(records: list[dict[str, Any]]) -> pd.DataFrame:
     return pd.DataFrame([_flatten(record) for record in records])
-
