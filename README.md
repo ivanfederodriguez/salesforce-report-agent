@@ -79,6 +79,33 @@ También se puede proveer `SALESFORCE_REFRESH_TOKEN` y `SALESFORCE_INSTANCE_URL`
 
 Si la organización bloquea Connected Apps no aprobadas, un administrador puede tener que autorizar la app y sus políticas OAuth.
 
+## Salesforce CLI mode (login web + MFA)
+
+Si ya podés entrar con login web y MFA, pero no tenés una Connected App, el agente puede reutilizar una autenticación administrada por Salesforce CLI. Primero autorizá la org y asignale un alias:
+
+```bash
+sf org login web --instance-url https://login.salesforce.com --alias techo
+```
+
+Luego configurá `.env`:
+
+```dotenv
+SALESFORCE_AUTH_MODE=sf_cli
+SALESFORCE_CLI_ALIAS=techo
+SF_READ_ONLY=true
+```
+
+No hacen falta `SALESFORCE_CLIENT_ID`, `SALESFORCE_CLIENT_SECRET`, contraseña ni security token. Para verificar la sesión:
+
+```bash
+python -m sf_report_agent.main sf-auth-status
+python -m sf_report_agent.main sf-doctor
+```
+
+En cada ejecución, el agente pide a `sf org display --target-org techo --json` una sesión vigente y usa el access token solo en memoria. No lo imprime, no lo copia a `.env` y no lo guarda en artifacts. Si la sesión dejó de ser válida, repetí `sf org login web --instance-url https://login.salesforce.com --alias techo`.
+
+Este modo no reduce los permisos del usuario autenticado en Salesforce; la garantía read-only sigue estando en el cliente y los validadores del agente.
+
 ## Password mode legacy
 
 En `.env`:
@@ -146,7 +173,7 @@ python -m sf_report_agent.main run-once --dry-run
 python -m sf_report_agent.main run-once
 ```
 
-`doctor` valida SQLite, DB propia, artifacts, Ollama y presencia del modelo. `sf-auth-status` verifica el modo y, en OAuth, prueba el refresh sin mostrar secretos. `sf-doctor` usa password o refresh token según `SALESFORCE_AUTH_MODE`, muestra el modo/instance URL, intenta `describe`, `SELECT ... LIMIT 1`, campos visibles y las tres Campaign IDs del fixture; guarda el resultado en `artifacts/permission_reports/`.
+`doctor` valida SQLite, DB propia, artifacts, Ollama y presencia del modelo. `sf-auth-status` verifica el modo y, en OAuth, prueba el refresh; en `sf_cli`, valida la sesión del alias sin mostrar el access token. `sf-doctor` usa password, refresh token o la sesión de Salesforce CLI según `SALESFORCE_AUTH_MODE`, muestra el modo/instance URL, intenta `describe`, `SELECT ... LIMIT 1`, campos visibles y las tres Campaign IDs del fixture; guarda el resultado en `artifacts/permission_reports/`.
 
 `inspect-schema` lista label, API name, tipo y `referenceTo` de los campos visibles. Guarda cada inspección en `artifacts/schema/<object>_describe_<timestamp>.json`.
 
@@ -178,6 +205,7 @@ El XLSX contiene `datos`, `metadata` y, cuando corresponde, `warnings`.
 - Los Campaign IDs y nombres de API se validan antes de construir SOQL.
 - `LOG_PII=false` evita dumps de registros; ninguna contraseña o token entra en logs/metadata.
 - `.salesforce_token.json` está excluido de Git y nunca se imprime en consola.
+- Los access tokens obtenidos desde Salesforce CLI se usan solo en memoria.
 - `REQUIRE_HUMAN_APPROVAL_FOR_PII=true` deja el resultado como `done_pending_approval`.
 - `ALLOW_REPORT_WITHOUT_PERSON_FIELDS=false` evita generar silenciosamente un reporte incompleto.
 - `UPDATE_SOURCE_TASK=false` mantiene la SQLite fuente intacta.

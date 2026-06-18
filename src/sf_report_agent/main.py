@@ -33,6 +33,7 @@ from sf_report_agent.salesforce.oauth import (
     save_token_file,
 )
 from sf_report_agent.salesforce.permissions_doctor import SalesforcePermissionsDoctor
+from sf_report_agent.salesforce.sf_cli import SalesforceCliError, load_salesforce_cli_session
 
 console = Console()
 
@@ -67,6 +68,13 @@ def _salesforce(settings: Settings) -> SalesforceClient:
             password=settings.salesforce_password or "",
             security_token=settings.salesforce_security_token or "",
             domain=settings.salesforce_domain,
+        )
+    if settings.salesforce_auth_mode == "sf_cli":
+        session = load_salesforce_cli_session(settings.salesforce_cli_alias or "")
+        return SalesforceClient.from_session(
+            instance_url=session.instance_url,
+            access_token=session.access_token,
+            username=session.username,
         )
     token = _refresh_oauth_session(settings)
     return SalesforceClient.from_session(
@@ -243,9 +251,19 @@ def command_sf_auth_status(settings: Settings, *, output: Console | None = None)
     refresh_status = "no aplica"
     ok = False
 
+    cli_status = "no aplica"
     if settings.salesforce_auth_mode == "password":
         ok = settings.has_salesforce_password_credentials
         refresh_status = "no aplica (password)"
+    elif settings.salesforce_auth_mode == "sf_cli":
+        refresh_status = "no aplica (sf_cli)"
+        try:
+            session = load_salesforce_cli_session(settings.salesforce_cli_alias or "")
+            instance_url = session.instance_url
+            cli_status = "sí"
+            ok = True
+        except SalesforceCliError as exc:
+            cli_status = f"no: {exc}"
     else:
         _, refresh_token, stored_instance_url = _oauth_material(settings)
         refresh_present = bool(refresh_token)
@@ -272,6 +290,9 @@ def command_sf_auth_status(settings: Settings, *, output: Console | None = None)
     table.add_row("Refresh token presente", "sí" if refresh_present else "no")
     table.add_row("Instance URL", instance_url or "desconocida")
     table.add_row("Puede refrescar access token", refresh_status)
+    if settings.salesforce_auth_mode == "sf_cli":
+        table.add_row("CLI target org", settings.salesforce_cli_alias or "no configurada")
+        table.add_row("Sesión Salesforce CLI válida", cli_status)
     target.print(table)
     return 0 if ok else 1
 
@@ -440,6 +461,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         SourceDatabaseError,
         SalesforceClientError,
         SalesforceOAuthError,
+        SalesforceCliError,
         OllamaError,
         ValueError,
         RuntimeError,

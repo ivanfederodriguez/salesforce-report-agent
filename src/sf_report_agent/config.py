@@ -46,6 +46,7 @@ class Settings:
     salesforce_access_token: str | None = None
     salesforce_instance_url: str | None = None
     salesforce_token_path: Path = Path(".salesforce_token.json")
+    salesforce_cli_alias: str | None = None
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> Settings:
@@ -88,6 +89,7 @@ class Settings:
             salesforce_token_path=Path(
                 os.getenv("SALESFORCE_TOKEN_PATH", ".salesforce_token.json")
             ),
+            salesforce_cli_alias=os.getenv("SALESFORCE_CLI_ALIAS") or None,
         )
         settings.validate()
         return settings
@@ -99,8 +101,12 @@ class Settings:
             raise ValueError("SF_READ_ONLY debe permanecer en true en el MVP")
         if self.max_export_rows <= 0:
             raise ValueError("MAX_EXPORT_ROWS debe ser mayor que cero")
-        if self.salesforce_auth_mode not in {"oauth", "password"}:
-            raise ValueError("SALESFORCE_AUTH_MODE debe ser 'oauth' o 'password'")
+        if self.salesforce_auth_mode not in {"oauth", "password", "sf_cli"}:
+            raise ValueError(
+                "SALESFORCE_AUTH_MODE debe ser 'oauth', 'password' o 'sf_cli'"
+            )
+        if self.salesforce_auth_mode == "sf_cli" and not self.salesforce_cli_alias:
+            raise ValueError("SALESFORCE_CLI_ALIAS es obligatorio con SALESFORCE_AUTH_MODE=sf_cli")
 
     @property
     def has_salesforce_credentials(self) -> bool:
