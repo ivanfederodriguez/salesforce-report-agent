@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
@@ -13,6 +12,7 @@ from sf_report_agent.models.permissions import (
     SalesforcePermissionReport,
 )
 from sf_report_agent.salesforce.client import SalesforceClient, SalesforceClientError
+from sf_report_agent.salesforce.ids import normalize_salesforce_id
 from sf_report_agent.salesforce.schema import CANDIDATE_OBJECTS
 
 FIXTURE_CAMPAIGN_IDS = ["7011W000001buEh", "701Pe00000VtQrK", "701Pe00000QysD4IAJ"]
@@ -85,11 +85,20 @@ class SalesforcePermissionsDoctor:
             checks.append(self._check_object(object_name, object_name in available))
 
         campaign_id_checks = dict.fromkeys(FIXTURE_CAMPAIGN_IDS, False)
+        campaign_id_matches: dict[str, str | None] = dict.fromkeys(FIXTURE_CAMPAIGN_IDS)
+        requested_by_normalized_id = {
+            normalize_salesforce_id(campaign_id): campaign_id
+            for campaign_id in FIXTURE_CAMPAIGN_IDS
+        }
         try:
             for record in self.client.get_campaigns_by_ids(FIXTURE_CAMPAIGN_IDS):
                 record_id = str(record.get("Id", ""))
-                if record_id in campaign_id_checks:
-                    campaign_id_checks[record_id] = True
+                requested_id = requested_by_normalized_id.get(
+                    normalize_salesforce_id(record_id)
+                )
+                if requested_id is not None:
+                    campaign_id_checks[requested_id] = True
+                    campaign_id_matches[requested_id] = record_id
         except SalesforceClientError as exc:
             warnings.append(f"No se pudieron verificar las campañas del fixture: {exc}")
 
@@ -103,6 +112,7 @@ class SalesforcePermissionsDoctor:
             instance_url=self.client.instance_url,
             object_checks=checks,
             campaign_id_checks=campaign_id_checks,
+            campaign_id_matches=campaign_id_matches,
             warnings=warnings,
             recommended_salesforce_permissions=recommendations,
         )
@@ -208,7 +218,17 @@ class SalesforcePermissionsDoctor:
                 check.error or "",
             )
         output.print(table)
-        output.print_json(json.dumps(report.campaign_id_checks, ensure_ascii=False))
+        campaign_table = Table(title="Campañas del fixture")
+        campaign_table.add_column("ID solicitado")
+        campaign_table.add_column("ID encontrado")
+        campaign_table.add_column("Visible")
+        for requested_id, found in report.campaign_id_checks.items():
+            campaign_table.add_row(
+                requested_id,
+                report.campaign_id_matches.get(requested_id) or "—",
+                "sí" if found else "no",
+            )
+        output.print(campaign_table)
         if report.recommended_salesforce_permissions:
             output.print("[bold]Recomendaciones:[/bold]")
             for recommendation in report.recommended_salesforce_permissions:
