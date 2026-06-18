@@ -23,3 +23,19 @@ CREATE TABLE IF NOT EXISTS report_artifacts (
     created_at TEXT NOT NULL,
     FOREIGN KEY(run_id) REFERENCES report_runs(id)
 );
+
+CREATE TABLE IF NOT EXISTS report_run_variants (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    task_id INTEGER NOT NULL,
+    variant_id TEXT NOT NULL,
+    variant_label TEXT NOT NULL,
+    interpretation TEXT,
+    soql TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    artifacts_json TEXT NOT NULL,
+    warnings_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(run_id, variant_id),
+    FOREIGN KEY(run_id) REFERENCES report_runs(id)
+);

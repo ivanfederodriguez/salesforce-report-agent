@@ -72,13 +72,15 @@ def write_run_metadata(
     task_id: int,
     artifacts_dir: Path,
     metadata: dict[str, Any],
+    variant_id: str | None = None,
     generated_at: datetime | None = None,
 ) -> Path:
     generated_at = generated_at or datetime.now(UTC)
     directory = artifacts_dir / "runs"
     directory.mkdir(parents=True, exist_ok=True)
     stamp = generated_at.strftime("%Y%m%dT%H%M%SZ")
-    path = directory / f"task_{task_id}_{stamp}.json"
+    variant_suffix = f"_{_slug(variant_id)}" if variant_id else ""
+    path = directory / f"task_{task_id}{variant_suffix}_{stamp}.json"
     path.write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
     )

@@ -105,3 +105,45 @@ class ReportRunRepository:
                 """,
                 (run_id, task_id, artifact_type, str(path), _now()),
             )
+
+    def add_variant_result(
+        self,
+        run_id: int,
+        task_id: int,
+        *,
+        variant_id: str,
+        variant_label: str,
+        interpretation: str | None,
+        soql: str,
+        row_count: int,
+        artifacts: list[str],
+        warnings: list[str],
+    ) -> None:
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO report_run_variants(
+                    run_id, task_id, variant_id, variant_label, interpretation,
+                    soql, row_count, artifacts_json, warnings_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id, variant_id) DO UPDATE SET
+                    variant_label = excluded.variant_label,
+                    interpretation = excluded.interpretation,
+                    soql = excluded.soql,
+                    row_count = excluded.row_count,
+                    artifacts_json = excluded.artifacts_json,
+                    warnings_json = excluded.warnings_json
+                """,
+                (
+                    run_id,
+                    task_id,
+                    variant_id,
+                    variant_label,
+                    interpretation,
+                    soql,
+                    row_count,
+                    _json(artifacts) or "[]",
+                    _json(warnings) or "[]",
+                    _now(),
+                ),
+            )

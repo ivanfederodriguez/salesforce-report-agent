@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-from sf_report_agent.models.report_plan import SalesforceReportPlan
+from sf_report_agent.models.report_plan import SalesforceReportPlan, SalesforceReportPlanBundle
 from sf_report_agent.models.report_request import SalesforceReportRequest
 from sf_report_agent.salesforce.client import SalesforceClient, SalesforceClientError
 
@@ -166,6 +168,27 @@ def _configured_api_names(value: Any) -> list[str]:
     return [item for item in values if isinstance(item, str) and item]
 
 
+def _fold(value: str) -> str:
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", value.casefold())
+        if not unicodedata.combining(char)
+    )
+
+
+def _variant_id(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", _fold(value)).strip("_")
+    return normalized or "variant"
+
+
+def _field_label(field_name: str, field: dict[str, Any] | None) -> str:
+    if field is not None:
+        label = field.get("label")
+        if isinstance(label, str) and label.strip():
+            return label.strip()
+    return field_name.replace("__c", "").replace("_", " ").strip()
+
+
 def build_report_plan(
     request: SalesforceReportRequest,
     snapshot: dict[str, Any],
@@ -226,6 +249,13 @@ def build_report_plan(
                 _mapped_value(donation_mapping, "campaña"),
             ]
         )
+    if not offline:
+        campaign_candidates.extend(
+            field_name
+            for field_name, field in field_details.items()
+            if _references_campaign(field)
+        )
+    campaign_candidates = list(dict.fromkeys(campaign_candidates))
     campaign_relationships_value = donation.get("campaign_relationships", {})
     campaign_relationships = (
         campaign_relationships_value
@@ -273,37 +303,51 @@ def build_report_plan(
         )
 
     date_field: str | None = None
-    if request.year is not None:
-        configured_date_field = donation.get("date_field")
-        if configured_date_field is None:
-            date_semantics = (
-                ("fecha_efectiva", "fecha_alta", "fecha_establecida")
-                if request.report_type == "altas_por_campaña"
-                else ("fecha_establecida", "fecha_efectiva", "fecha_alta")
+    if request.year is not None or request.date_from is not None or request.date_to is not None:
+        date_semantics = (
+            ("fecha_alta", "fecha_establecida")
+            if request.report_type == "altas_por_campaña"
+            else ("fecha_establecida", "fecha_alta")
+        )
+        date_candidates = _configured_api_names(donation.get("date_field"))
+        for semantic_name in date_semantics:
+            date_candidates.extend(
+                _configured_api_names(_mapped_value(donation_mapping, semantic_name))
             )
-            configured_date_field = next(
-                (
-                    _mapped_value(donation_mapping, semantic_name)
-                    for semantic_name in date_semantics
-                    if _mapped_value(donation_mapping, semantic_name)
-                ),
-                None,
+        if not offline:
+            date_candidates.extend(
+                field_name
+                for field_name, field in field_details.items()
+                if any(
+                    hint in _fold(str(field.get("label") or ""))
+                    for hint in ("fecha establecida", "fecha de alta", "fecha alta")
+                )
             )
-        if not isinstance(configured_date_field, str) or not configured_date_field:
+        date_candidates = list(dict.fromkeys(date_candidates))
+        visible_date_candidates = [
+            candidate for candidate in date_candidates if offline or candidate in available
+        ]
+        if not visible_date_candidates:
             warnings.append("No hay un campo de fecha primario configurado para el reporte.")
             questions.append(
-                f"¿Qué campo de {primary_object} representa la fecha para el año {request.year}?"
-            )
-        elif not offline and configured_date_field not in available:
-            warnings.append(
-                f"El campo de fecha {primary_object}.{configured_date_field} no está visible."
-            )
-            questions.append(
-                f"¿Qué campo visible de {primary_object} representa la fecha del reporte?"
+                f"¿Qué campo de {primary_object} representa la fecha del reporte?"
             )
         else:
-            date_field = configured_date_field
-            selected.append(date_field)
+            date_field = visible_date_candidates[0]
+            selected.extend(visible_date_candidates)
+        missing_date_candidates = [
+            candidate for candidate in date_candidates if candidate not in visible_date_candidates
+        ]
+        if missing_date_candidates:
+            warnings.append(
+                f"Campos de fecha sugeridos no visibles en {primary_object}: "
+                + ", ".join(missing_date_candidates)
+            )
+        if len(visible_date_candidates) > 1:
+            warnings.append(
+                "Se encontraron varias fechas compatibles con alta; se filtró por "
+                f"{date_field} y se incluyeron las alternativas visibles."
+            )
 
     origin_source_field: str | None = None
     if request.origin_sources:
@@ -411,6 +455,8 @@ def build_report_plan(
         questions.append("¿Qué campañas o fuentes de origen debe incluir el reporte?")
     if "período" in request.missing_information:
         questions.append("¿Qué año o período debe cubrir el reporte?")
+    if request.year is None and request.date_from is None and request.date_to is None:
+        questions.append("¿Qué año o período debe cubrir el reporte?")
     if "campos requeridos" in request.missing_information:
         questions.append("¿Qué campos debe incluir el reporte?")
     needs_clarification = bool(questions)
@@ -435,8 +481,12 @@ def build_report_plan(
         filters.append(f"{origin_source_field} en fuentes de origen solicitadas")
     if request.year and date_field:
         filters.append(f"Año {request.year} según {date_field}")
+    elif date_field and (request.date_from or request.date_to):
+        filters.append(f"Período solicitado según {date_field}")
     return SalesforceReportPlan(
         task_id=request.task_id,
+        variant_id="combined" if len(campaign_filter_fields) > 1 else "default",
+        variant_label="Campañas combinadas" if len(campaign_filter_fields) > 1 else title,
         title=title,
         description=description,
         primary_object=primary_object,
@@ -446,12 +496,103 @@ def build_report_plan(
         campaign_filter_fields=campaign_filter_fields,
         origin_sources=request.origin_sources,
         origin_source_field=origin_source_field,
+        origin_sources_resolved_by_campaign_ids=bool(
+            request.campaign_ids
+            and origin_source_field
+            and origin_source_field in campaign_filter_fields
+        ),
         date_filter_field=date_field,
-        date_filter_description=f"CALENDAR_YEAR({date_field}) = {request.year}"
-        if request.year and date_field
-        else None,
+        date_filter_description=(
+            f"CALENDAR_YEAR({date_field}) = {request.year}"
+            if request.year and date_field
+            else (
+                f"Desde {request.date_from or 'inicio'} hasta {request.date_to or 'fin'}"
+                if date_field and (request.date_from or request.date_to)
+                else None
+            )
+        ),
         joins_or_relationships=[validated_person_prefix] if validated_person_prefix else [],
         warnings=warnings,
         needs_clarification=needs_clarification,
         clarification_questions=questions,
+    )
+
+
+def build_report_plan_bundle(
+    request: SalesforceReportRequest,
+    snapshot: dict[str, Any],
+    *,
+    allow_report_without_person_fields: bool = False,
+) -> SalesforceReportPlanBundle:
+    base_plan = build_report_plan(
+        request,
+        snapshot,
+        allow_report_without_person_fields=allow_report_without_person_fields,
+    )
+    questions = list(dict.fromkeys(base_plan.clarification_questions))
+    warnings = list(dict.fromkeys(base_plan.warnings))
+    if base_plan.needs_clarification:
+        return SalesforceReportPlanBundle(
+            task_id=request.task_id,
+            plans=[base_plan],
+            needs_clarification=True,
+            clarification_questions=questions,
+            warnings=warnings,
+        )
+
+    campaign_fields = base_plan.campaign_filter_fields
+    if len(campaign_fields) <= 1 or not request.campaign_ids:
+        plan = base_plan.model_copy(
+            update={
+                "variant_id": "default",
+                "variant_label": base_plan.title,
+                "ambiguity_reason": None,
+            }
+        )
+        return SalesforceReportPlanBundle(task_id=request.task_id, plans=[plan], warnings=warnings)
+
+    field_details = _object_fields_by_name(snapshot, base_plan.primary_object)
+    ambiguity_note = (
+        "El pedido admite más de una interpretación segura del campo campaña; "
+        "se generó una variante por lookup y una variante combinada."
+    )
+    plans: list[SalesforceReportPlan] = []
+    used_ids: set[str] = set()
+    for index, field_name in enumerate(campaign_fields, start=1):
+        label = _field_label(field_name, field_details.get(field_name))
+        candidate_id = _variant_id(label)
+        variant_id = candidate_id if candidate_id not in used_ids else f"{candidate_id}_{index}"
+        used_ids.add(variant_id)
+        plans.append(
+            base_plan.model_copy(
+                update={
+                    "variant_id": variant_id,
+                    "variant_label": label,
+                    "ambiguity_reason": f"Campañas filtradas únicamente por {label}.",
+                    "campaign_filter_fields": [field_name],
+                    "filters": [
+                        f"{field_name} en campañas solicitadas",
+                        *[
+                            value
+                            for value in base_plan.filters
+                            if " en campañas solicitadas" not in value
+                        ],
+                    ],
+                }
+            )
+        )
+    plans.append(
+        base_plan.model_copy(
+            update={
+                "variant_id": "combined",
+                "variant_label": "Campañas combinadas",
+                "ambiguity_reason": "Campañas filtradas por cualquiera de los lookups detectados.",
+            }
+        )
+    )
+    return SalesforceReportPlanBundle(
+        task_id=request.task_id,
+        plans=plans,
+        ambiguity_note=ambiguity_note,
+        warnings=warnings,
     )

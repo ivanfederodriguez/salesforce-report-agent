@@ -47,6 +47,7 @@ class Settings:
     salesforce_instance_url: str | None = None
     salesforce_token_path: Path = Path(".salesforce_token.json")
     salesforce_cli_alias: str | None = None
+    allow_salesforce_report_create: bool = False
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> Settings:
@@ -90,6 +91,9 @@ class Settings:
                 os.getenv("SALESFORCE_TOKEN_PATH", ".salesforce_token.json")
             ),
             salesforce_cli_alias=os.getenv("SALESFORCE_CLI_ALIAS") or None,
+            allow_salesforce_report_create=_as_bool(
+                os.getenv("ALLOW_SALESFORCE_REPORT_CREATE"), False
+            ),
         )
         settings.validate()
         return settings

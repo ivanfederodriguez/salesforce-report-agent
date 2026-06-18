@@ -135,7 +135,7 @@ No se requieren ni se recomiendan permisos de escritura.
 
 ## Schema y field mapping
 
-El resolver describe objetos candidatos y solo usa campos visibles. El ejemplo está en [`config/field_mapping.example.json`](config/field_mapping.example.json). Para usar un mapping revisado:
+El resolver describe objetos candidatos y solo usa campos visibles. El mapping aporta pistas semánticas; `describe` es la verdad técnica para API names, tipos, labels y relaciones. El ejemplo está en [`config/field_mapping.example.json`](config/field_mapping.example.json). Para usar un mapping revisado:
 
 ```dotenv
 FIELD_MAPPING_PATH=config/field_mapping.json
@@ -143,7 +143,9 @@ FIELD_MAPPING_PATH=config/field_mapping.json
 
 Un valor `null` produce una advertencia y, si el campo fue solicitado, una aclaración; el agente no inventa campos. Las fuentes de origen también requieren mapping explícito, por ejemplo `"campaña_origen": "LeadSource"` dentro de `donation.fields`.
 
-El objeto de donación puede definir `date_field` para el filtro anual y uno o más `campaign_filter_fields`. Cuando hay varios, el SOQL los combina con `OR`. `campaign_relationships` permite incluir el nombre relacionado en el `SELECT`, sin asumir `CampaignId`, `CloseDate` ni nombres de relaciones universales. El mapping real NPSP está en [`config/field_mapping.json`](config/field_mapping.json).
+El objeto de donación puede definir `date_field` para el filtro anual y uno o más `campaign_filter_fields`. Si metadata expone varios lookups seguros a Campaign, el planner genera una variante por lookup y otra combinada con `OR`; no frena por una ambigüedad read-only y acotada. `campaign_relationships` permite incluir el nombre relacionado en el `SELECT`, sin asumir `CampaignId`, `CloseDate` ni nombres de relaciones universales. El mapping real NPSP está en [`config/field_mapping.json`](config/field_mapping.json), donde `npe03__Date_Established__c` representa la fecha de alta.
+
+Antes de exportar, los API names se renombran con los labels reales de Salesforce. Para relaciones se combina el label del lookup y el campo relacionado, por ejemplo `Contacto: Fecha de nacimiento`. Cada metadata JSON conserva el diccionario `api_name_to_label` para auditoría.
 
 Los datos personales sobre un objeto de donación solo se agregan cuando el mapping incluye una relación inequívoca, por ejemplo:
 
@@ -192,11 +194,11 @@ START -> load_task -> parse_request -> resolve_salesforce_schema
       -> compose_response -> persist_result -> END
 ```
 
-Cada corrida queda auditada en `salesforce_report_agent.db`. Los reportes se escriben en:
+Cada corrida y cada variante quedan auditadas en `salesforce_report_agent.db`. Los reportes se escriben en:
 
 - `artifacts/reports/task_<id>_<slug>_<timestamp>.csv`;
 - `artifacts/reports/task_<id>_<slug>_<timestamp>.xlsx`;
-- `artifacts/runs/task_<id>_<timestamp>.json`.
+- `artifacts/runs/task_<id>_<variant>_<timestamp>.json`.
 
 El XLSX contiene `datos`, `metadata` y, cuando corresponde, `warnings`.
 
@@ -211,6 +213,7 @@ El XLSX contiene `datos`, `metadata` y, cuando corresponde, `warnings`.
 - `REQUIRE_HUMAN_APPROVAL_FOR_PII=true` deja el resultado como `done_pending_approval`.
 - `ALLOW_REPORT_WITHOUT_PERSON_FIELDS=false` evita generar silenciosamente un reporte incompleto.
 - `UPDATE_SOURCE_TASK=false` mantiene la SQLite fuente intacta.
+- `ALLOW_SALESFORCE_REPORT_CREATE=false` deshabilita por defecto la creación opcional de Reports en Salesforce. Si se habilita y la operación falla, los CSV/XLSX locales se conservan y la corrida termina con una advertencia.
 - Nunca hay envío automático a Slack.
 
 ## Tests y calidad
@@ -221,4 +224,4 @@ ruff check .
 mypy src
 ```
 
-La suite cubre extracción de IDs, parsing del pedido de Micaela, SOQL seguro, permission doctor y el grafo completo con Salesforce simulado y artifacts reales.
+La suite cubre extracción de IDs, parsing, bundles de planes, variantes SOQL seguras, labels de metadata, exports múltiples, persistencia por variante, permission doctor y el grafo completo con Salesforce simulado y artifacts reales.

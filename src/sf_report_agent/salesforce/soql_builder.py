@@ -62,9 +62,7 @@ class SOQLBuilder:
                 else "(" + " OR ".join(campaign_filters) + ")"
             )
         origin_covered_by_campaign_ids = bool(
-            campaign_ids
-            and plan.origin_source_field
-            and plan.origin_source_field in plan.campaign_filter_fields
+            campaign_ids and plan.origin_sources_resolved_by_campaign_ids
         )
         if request.origin_sources and not origin_covered_by_campaign_ids:
             if not plan.origin_source_field:
@@ -84,6 +82,14 @@ class SOQLBuilder:
                 raise ValueError("Falta el mapping del campo de fecha")
             date_field = self._api_name(plan.date_filter_field)
             filters.append(f"CALENDAR_YEAR({date_field}) = {request.year}")
+        elif request.date_from is not None or request.date_to is not None:
+            if not plan.date_filter_field:
+                raise ValueError("Falta el mapping del campo de fecha")
+            date_field = self._api_name(plan.date_filter_field)
+            if request.date_from is not None:
+                filters.append(f"{date_field} >= {request.date_from.isoformat()}")
+            if request.date_to is not None:
+                filters.append(f"{date_field} <= {request.date_to.isoformat()}")
 
         limit = min(200, self.max_rows) if dry_run else self.max_rows
         soql = (

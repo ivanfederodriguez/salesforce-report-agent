@@ -10,7 +10,7 @@ from sf_report_agent.models.execution_result import ExecutionResult
 
 
 def _route_after_validation(state: ReportAgentState) -> Literal["clarification", "continue"]:
-    if state["report_plan"].needs_clarification:
+    if state["plan_bundle"].needs_clarification:
         return "clarification"
     return "continue"
 
@@ -94,4 +94,5 @@ class ReportAgentRunner:
             response_text=final_state.get("response_text", ""),
             warnings=final_state.get("warnings", []),
             errors=final_state.get("errors", []),
+            variants=final_state.get("variant_results", []),
         )

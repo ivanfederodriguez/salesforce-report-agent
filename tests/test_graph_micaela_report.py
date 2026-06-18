@@ -17,31 +17,53 @@ from sf_report_agent.models.task import ExternalTask
 
 class RecurringDonationSalesforceClient(FakeSalesforceClient):
     def describe_object(self, object_name: str) -> dict[str, Any]:
+        if object_name == "Contact":
+            return {
+                "fields": [
+                    {"name": "Id", "label": "ID del contacto", "type": "id"},
+                    {"name": "Name", "label": "Nombre", "type": "string"},
+                    {
+                        "name": "Birthdate",
+                        "label": "Fecha de nacimiento",
+                        "type": "date",
+                    },
+                    {"name": "MailingCity", "label": "Ciudad", "type": "string"},
+                    {"name": "MailingState", "label": "Provincia", "type": "string"},
+                    {"name": "MailingCountry", "label": "País", "type": "string"},
+                ]
+            }
         if object_name != "npe03__Recurring_Donation__c":
             return super().describe_object(object_name)
         fields = [
-            {"name": "Id", "type": "id"},
-            {"name": "Name", "type": "string"},
-            {"name": "npe03__Amount__c", "type": "currency"},
-            {"name": "npsp__Status__c", "type": "picklist"},
-            {"name": "npsp__StartDate__c", "type": "date"},
-            {"name": "npsp__EndDate__c", "type": "date"},
-            {"name": "npe03__Date_Established__c", "type": "date"},
-            {"name": "Fecha_de_alta__c", "type": "date"},
+            {"name": "Id", "label": "ID de donación recurrente", "type": "id"},
+            {"name": "Name", "label": "Nombre", "type": "string"},
+            {"name": "npe03__Amount__c", "label": "Importe", "type": "currency"},
+            {"name": "npsp__Status__c", "label": "Estado", "type": "picklist"},
+            {"name": "npsp__StartDate__c", "label": "Fecha inicial", "type": "date"},
+            {"name": "npsp__EndDate__c", "label": "Fecha final", "type": "date"},
+            {
+                "name": "npe03__Date_Established__c",
+                "label": "Fecha establecida",
+                "type": "date",
+            },
+            {"name": "Fecha_de_alta__c", "label": "Fecha de alta", "type": "date"},
             {
                 "name": "npe03__Contact__c",
+                "label": "Contacto",
                 "type": "reference",
                 "referenceTo": ["Contact"],
                 "relationshipName": "npe03__Contact__r",
             },
             {
                 "name": "Campa_a_de_origen__c",
+                "label": "Campaña de origen",
                 "type": "reference",
                 "referenceTo": ["Campaign"],
                 "relationshipName": "Campa_a_de_origen__r",
             },
             {
                 "name": "npe03__Recurring_Donation_Campaign__c",
+                "label": "Campaña para las donaciones futuras",
                 "type": "reference",
                 "referenceTo": ["Campaign"],
                 "relationshipName": "npe03__Recurring_Donation_Campaign__r",
@@ -88,7 +110,23 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
         ]
 
 
-def _settings(tmp_path: Path, source_db: Path, *, mapping_path: Path | None = None) -> Settings:
+class ReportCreationSalesforceClient(FakeSalesforceClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.create_attempts = 0
+
+    def create_report(self, **kwargs: Any) -> None:
+        self.create_attempts += 1
+        raise RuntimeError("permiso insuficiente")
+
+
+def _settings(
+    tmp_path: Path,
+    source_db: Path,
+    *,
+    mapping_path: Path | None = None,
+    allow_salesforce_report_create: bool = False,
+) -> Settings:
     return Settings(
         source_db_path=source_db,
         worker_db_path=tmp_path / "worker.db",
@@ -108,6 +146,7 @@ def _settings(tmp_path: Path, source_db: Path, *, mapping_path: Path | None = No
         log_pii=False,
         update_source_task=False,
         allow_report_without_person_fields=False,
+        allow_salesforce_report_create=allow_salesforce_report_create,
     )
 
 
@@ -118,10 +157,17 @@ def _run(
     *,
     mapping_path: Path,
     dry_run: bool = False,
+    allow_salesforce_report_create: bool = False,
 ) -> tuple[ExecutionResult, Settings]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     source_db = tmp_path / "source.db"
     create_source_database(source_db, task)
-    settings = _settings(tmp_path, source_db, mapping_path=mapping_path)
+    settings = _settings(
+        tmp_path,
+        source_db,
+        mapping_path=mapping_path,
+        allow_salesforce_report_create=allow_salesforce_report_create,
+    )
     services = AgentServices(
         settings=settings,
         task_reader=TaskReader(source_db),
@@ -183,19 +229,23 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
 
     assert settings.field_mapping_path == mapping_path
     assert result.status == "done_pending_approval"
-    assert "FROM npe03__Recurring_Donation__c" in result.soql
-    assert (
-        "Campa_a_de_origen__c IN "
-        "('7011W000001buEh', '701Pe00000VtQrK', '701Pe00000QysD4IAJ')"
-    ) in result.soql
-    assert (
-        "npe03__Recurring_Donation_Campaign__c IN "
-        "('7011W000001buEh', '701Pe00000VtQrK', '701Pe00000QysD4IAJ')"
-    ) in result.soql
-    assert " OR " in result.soql
-    assert "CALENDAR_YEAR(npsp__StartDate__c) = 2026" in result.soql
-    assert "CampaignId" not in result.soql
-    assert "CloseDate" not in result.soql
+    assert len(result.variants) == 3
+    by_id = {variant.variant_id: variant for variant in result.variants}
+    origin = by_id["campana_de_origen"]
+    future = by_id["campana_para_las_donaciones_futuras"]
+    combined = by_id["combined"]
+    assert "Campa_a_de_origen__c IN" in origin.soql
+    assert "npe03__Recurring_Donation_Campaign__c IN" not in origin.soql.split("WHERE", 1)[1]
+    assert "npe03__Recurring_Donation_Campaign__c IN" in future.soql
+    assert "Campa_a_de_origen__c IN" not in future.soql.split("WHERE", 1)[1]
+    assert "Campa_a_de_origen__c IN" in combined.soql
+    assert "npe03__Recurring_Donation_Campaign__c IN" in combined.soql
+    assert " OR " in combined.soql
+    for variant in result.variants:
+        assert "FROM npe03__Recurring_Donation__c" in variant.soql
+        assert "CALENDAR_YEAR(npe03__Date_Established__c) = 2026" in variant.soql
+        assert "CampaignId" not in variant.soql
+        assert "CloseDate" not in variant.soql
     for relationship_field in (
         "npe03__Contact__r.Name",
         "npe03__Contact__r.Birthdate",
@@ -205,8 +255,41 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
         "Campa_a_de_origen__r.Name",
         "npe03__Recurring_Donation_Campaign__r.Name",
     ):
-        assert relationship_field in result.soql
-    assert salesforce.queried_soql == [result.soql]
+        assert all(relationship_field in variant.soql for variant in result.variants)
+    assert salesforce.queried_soql == [variant.soql for variant in result.variants]
+    assert "todas las variantes read-only seguras" in result.response_text
+    assert "Campaña de origen" in result.response_text
+    assert "Campaña para las donaciones futuras" in result.response_text
+    assert "Campañas combinadas" in result.response_text
+    assert all(len(variant.artifacts) == 3 for variant in result.variants)
+
+    origin_csv = next(Path(path) for path in origin.artifacts if path.endswith(".csv"))
+    headers = origin_csv.read_text(encoding="utf-8").splitlines()[0]
+    assert "Importe" in headers
+    assert "Fecha establecida" in headers
+    assert "Contacto: Fecha de nacimiento" in headers
+    assert "Campa_a_de_origen__c" not in headers
+
+    metadata_path = next(Path(path) for path in combined.artifacts if path.endswith(".json"))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["variant_id"] == "combined"
+    assert metadata["soql"] == combined.soql
+    assert metadata["api_name_to_label"]["npe03__Amount__c"] == "Importe"
+
+    with sqlite3.connect(settings.worker_db_path) as connection:
+        rows = connection.execute(
+            "SELECT variant_id, soql, artifacts_json FROM report_run_variants ORDER BY id"
+        ).fetchall()
+        artifact_count = connection.execute(
+            "SELECT COUNT(*) FROM report_artifacts"
+        ).fetchone()
+    assert [row[0] for row in rows] == [
+        "campana_de_origen",
+        "campana_para_las_donaciones_futuras",
+        "combined",
+    ]
+    assert all(json.loads(row[2]) for row in rows)
+    assert artifact_count is not None and artifact_count[0] >= 9
 
 
 def test_dry_run_never_queries_salesforce(
@@ -269,3 +352,36 @@ def test_missing_origin_mapping_finishes_needs_clarification(
     assert result.status == "needs_clarification"
     assert fake_salesforce.queried_soql == []
     assert "¿Qué campo de Salesforce representa campaña de origen/fuente?" in result.response_text
+
+
+def test_salesforce_report_creation_is_disabled_by_default_and_failure_is_non_fatal(
+    tmp_path: Path,
+    micaela_task: ExternalTask,
+) -> None:
+    mapping_path = write_field_mapping(tmp_path / "mapping.json")
+    disabled_client = ReportCreationSalesforceClient()
+
+    disabled_result, _ = _run(
+        tmp_path / "disabled",
+        micaela_task,
+        disabled_client,
+        mapping_path=mapping_path,
+    )
+
+    assert disabled_result.status == "done_pending_approval"
+    assert disabled_client.create_attempts == 0
+
+    enabled_mapping = write_field_mapping(tmp_path / "enabled-mapping.json")
+    enabled_client = ReportCreationSalesforceClient()
+    enabled_result, _ = _run(
+        tmp_path / "enabled",
+        micaela_task,
+        enabled_client,
+        mapping_path=enabled_mapping,
+        allow_salesforce_report_create=True,
+    )
+
+    assert enabled_result.status == "done_pending_approval"
+    assert enabled_client.create_attempts == 1
+    assert any("Los archivos locales se conservaron" in value for value in enabled_result.warnings)
+    assert any(path.endswith(".csv") for path in enabled_result.artifacts)

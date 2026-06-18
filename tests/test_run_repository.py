@@ -43,3 +43,35 @@ def test_repository_persists_supported_final_statuses(tmp_path: Path, status: st
     assert row[3] == "Respuesta persistida"
     assert row[4] == '["Warning persistido"]'
     assert (row[5] is not None) is (status == "failed")
+
+
+def test_repository_persists_variant_results(tmp_path: Path) -> None:
+    repository = ReportRunRepository(tmp_path / "worker.db")
+    run_id = repository.start_run(23)
+
+    repository.add_variant_result(
+        run_id,
+        23,
+        variant_id="campaign_origin",
+        variant_label="Campaña de origen",
+        interpretation="Filtro por campaña de origen",
+        soql="SELECT Id FROM Donation__c LIMIT 10",
+        row_count=4,
+        artifacts=["artifacts/report.csv"],
+        warnings=["warning"],
+    )
+
+    with sqlite3.connect(repository.db_path) as connection:
+        row = connection.execute(
+            "SELECT variant_id, variant_label, soql, row_count, artifacts_json, warnings_json "
+            "FROM report_run_variants WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+    assert row == (
+        "campaign_origin",
+        "Campaña de origen",
+        "SELECT Id FROM Donation__c LIMIT 10",
+        4,
+        '["artifacts/report.csv"]',
+        '["warning"]',
+    )

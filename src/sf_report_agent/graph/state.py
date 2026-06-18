@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, TypedDict
 
 from sf_report_agent.models.permissions import SalesforcePermissionReport
-from sf_report_agent.models.report_plan import SalesforceReportPlan
+from sf_report_agent.models.report_plan import SalesforceReportPlan, SalesforceReportPlanBundle
 from sf_report_agent.models.report_request import SalesforceReportRequest
 from sf_report_agent.models.task import ExternalTask
 
@@ -15,6 +15,7 @@ class ReportAgentState(TypedDict, total=False):
     permission_report: SalesforcePermissionReport
     schema_snapshot: dict[str, Any]
     report_plan: SalesforceReportPlan
+    plan_bundle: SalesforceReportPlanBundle
     soql: str
     raw_records: list[dict[str, Any]]
     dataframe_path: str
@@ -28,3 +29,8 @@ class ReportAgentState(TypedDict, total=False):
     dataframe_records: list[dict[str, Any]]
     dataframe_columns: list[str]
     quality_report: dict[str, Any]
+    variant_queries: list[dict[str, Any]]
+    variant_records: list[dict[str, Any]]
+    variant_datasets: list[dict[str, Any]]
+    variant_quality_reports: list[dict[str, Any]]
+    variant_results: list[dict[str, Any]]
