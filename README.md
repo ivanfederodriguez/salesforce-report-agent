@@ -162,7 +162,9 @@ Un valor `null` produce una advertencia y, si el campo fue solicitado, una aclar
 
 Con semántica de negocio activa, múltiples lookups técnicos a Campaign no generan variantes. Por ejemplo, una campaña principal se filtra por `Campa_a_Principal__c`; campaña futura o recupero solo se usan si el pedido los menciona y la ontología los define. Las variantes se reservan para interpretaciones de negocio reales o para segmentos solicitados. El fallback basado en mapping todavía admite `date_field`, `campaign_filter_fields` y `campaign_relationships`, sin asumir `CampaignId`, `CloseDate` ni relaciones universales.
 
-Edad se calcula localmente desde Birthdate y Provincia toma el primer campo de estado/provincia no vacío configurado. Sus dependencias técnicas viajan en el `SELECT`, pero se ocultan del export cuando no son columnas pedidas.
+Cuando la semántica selecciona una entidad, las dudas de campos o permisos permanecen en ese planner y producen `needs_clarification`; no reactivan variantes del planner técnico. Las dimensiones usadas con `LIKE` también deben estar marcadas como `filterable` por describe. Si la dimensión existe pero no es filtrable para el usuario, el agente lo informa y no ejecuta la consulta.
+
+Edad se calcula localmente desde Birthdate y Provincia toma el primer campo de estado/provincia visible y no vacío configurado. Sus dependencias técnicas viajan en el `SELECT`, pero se ocultan del export cuando no son columnas pedidas. Los perfiles también pueden declarar `fallback_fields`; el perfil actual usa `Contact.Name` con advertencia si `FirstName` o `LastName` no están visibles.
 
 Antes de exportar, los API names se renombran con los labels reales de Salesforce. Para relaciones se combina el label del lookup y el campo relacionado, por ejemplo `Contacto: Fecha de nacimiento`. Cada metadata JSON conserva el diccionario `api_name_to_label` para auditoría.
 

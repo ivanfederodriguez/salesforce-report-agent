@@ -86,6 +86,7 @@ class SchemaResolver:
                         "name": field.get("name"),
                         "label": field.get("label"),
                         "type": field.get("type"),
+                        "filterable": field.get("filterable"),
                         "referenceTo": field.get("referenceTo", []),
                         "relationshipName": field.get("relationshipName"),
                     }

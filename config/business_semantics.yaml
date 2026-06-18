@@ -103,6 +103,8 @@ report_profiles:
         fields:
           - npe03__Contact__r.FirstName
           - npe03__Contact__r.LastName
+        fallback_fields:
+          - npe03__Contact__r.Name
       - request_fields: [fecha_nacimiento_o_edad]
         terms: [edad, fecha de nacimiento]
         fields:

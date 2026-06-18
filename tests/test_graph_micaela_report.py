@@ -83,6 +83,7 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                 "name": "Campa_a_Principal__c",
                 "label": "Campaña Principal de Origen",
                 "type": "string",
+                "filterable": True,
             },
             {
                 "name": "npe03__Recurring_Donation_Campaign__c",
@@ -139,6 +140,19 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                 },
             }
         ]
+
+
+class NonFilterableMainCampaignSalesforceClient(RecurringDonationSalesforceClient):
+    def describe_object(self, object_name: str) -> dict[str, Any]:
+        description = super().describe_object(object_name)
+        if object_name == "npe03__Recurring_Donation__c":
+            field = next(
+                value
+                for value in description["fields"]
+                if value["name"] == "Campa_a_Principal__c"
+            )
+            field["filterable"] = False
+        return description
 
 
 class ReportCreationSalesforceClient(FakeSalesforceClient):
@@ -342,6 +356,31 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
     ]
     assert all(json.loads(row[2]) for row in rows)
     assert artifact_count is not None and artifact_count[0] >= 6
+
+
+def test_task_23_non_filterable_main_campaign_needs_semantic_clarification(
+    tmp_path: Path,
+    micaela_task: ExternalTask,
+) -> None:
+    task_23 = micaela_task.model_copy(update={"id": 23})
+    root = Path(__file__).parents[1]
+    salesforce = NonFilterableMainCampaignSalesforceClient()
+
+    result, _ = _run(
+        tmp_path,
+        task_23,
+        salesforce,
+        mapping_path=root / "config" / "field_mapping.json",
+        business_semantics_path=root / "config" / "business_semantics.yaml",
+    )
+
+    assert result.status == "needs_clarification"
+    assert salesforce.queried_soql == []
+    assert (
+        "La dimensión Campaña Principal de Origen existe en el reporte Salesforce, "
+        "pero no está disponible/filtrable por SOQL con el usuario actual."
+        in result.response_text
+    )
 
 
 def test_dry_run_never_queries_salesforce(

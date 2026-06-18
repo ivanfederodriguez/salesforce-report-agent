@@ -53,6 +53,7 @@ class ConditionalFieldGroup(BaseModel):
     request_fields: list[str] = Field(default_factory=list)
     terms: list[str] = Field(default_factory=list)
     fields: list[str] = Field(default_factory=list)
+    fallback_fields: list[str] = Field(default_factory=list)
     derived_fields: list[str] = Field(default_factory=list)
 
 

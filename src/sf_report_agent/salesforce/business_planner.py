@@ -68,6 +68,32 @@ def _visible_field(snapshot: dict[str, Any], object_name: str, field_path: str) 
     return False
 
 
+def _supports_contains_filter(
+    snapshot: dict[str, Any], object_name: str, field_name: str
+) -> bool:
+    if snapshot.get("offline"):
+        return True
+    field = next(
+        (
+            value
+            for value in _object_fields(snapshot, object_name)
+            if value.get("name") == field_name
+        ),
+        None,
+    )
+    if field is None or field.get("filterable") is not True:
+        return False
+    field_type = str(field.get("type") or "").casefold()
+    return field_type in {
+        "email",
+        "encryptedstring",
+        "phone",
+        "string",
+        "textarea",
+        "url",
+    }
+
+
 def _select_date_concept(entity: BusinessEntity, text: str) -> str | None:
     preferred = [
         name
@@ -105,19 +131,52 @@ def _configured_profile_fields(
     profile: ReportProfile | None,
     request: SalesforceReportRequest,
     text: str,
-) -> tuple[list[str], list[str]]:
+    snapshot: dict[str, Any],
+    entity: BusinessEntity,
+) -> tuple[list[str], list[str], list[str]]:
     if profile is None:
-        return [], []
+        return [], [], []
     fields = list(profile.fields)
     derived_fields = list(profile.derived_fields)
+    warnings: list[str] = []
     requested_fields = {*request.person_fields, *request.donation_fields}
     for group in profile.conditional_field_groups:
         if requested_fields.intersection(group.request_fields) or contains_term(
             text, group.terms
         ):
-            fields.extend(group.fields)
+            visible_fields = [
+                field_name
+                for field_name in group.fields
+                if _visible_field(snapshot, entity.object, field_name)
+            ]
+            fields.extend(visible_fields)
+            missing_fields = [
+                field_name for field_name in group.fields if field_name not in visible_fields
+            ]
+            if missing_fields:
+                visible_fallbacks = [
+                    field_name
+                    for field_name in group.fallback_fields
+                    if _visible_field(snapshot, entity.object, field_name)
+                ]
+                fields.extend(visible_fallbacks)
+                if visible_fallbacks:
+                    warnings.append(
+                        "No están visibles todos los campos preferidos "
+                        f"({', '.join(missing_fields)}); se usó "
+                        f"{', '.join(visible_fallbacks)} como fallback."
+                    )
+                else:
+                    warnings.append(
+                        "No están visibles los campos solicitados "
+                        f"{', '.join(missing_fields)} y no hay fallback visible; se omitieron."
+                    )
             derived_fields.extend(group.derived_fields)
-    return list(dict.fromkeys(fields)), list(dict.fromkeys(derived_fields))
+    return (
+        list(dict.fromkeys(fields)),
+        list(dict.fromkeys(derived_fields)),
+        warnings,
+    )
 
 
 def build_business_plan_bundle(
@@ -131,10 +190,10 @@ def build_business_plan_bundle(
         return None
     entity_name, entity = selected_entity
     profile = semantics.select_profile(entity_name, text)
-    profile_fields, profile_derived_fields = _configured_profile_fields(
-        profile, request, text
+    profile_fields, profile_derived_fields, profile_warnings = (
+        _configured_profile_fields(profile, request, text, snapshot, entity)
     )
-    warnings: list[str] = []
+    warnings: list[str] = list(profile_warnings)
     questions: list[str] = []
 
     if not snapshot.get("offline") and entity.object not in snapshot.get("objects", {}):
@@ -237,6 +296,7 @@ def build_business_plan_bundle(
     campaign_values = semantics.campaign_group_values(
         [*request.campaign_names, *request.origin_sources]
     )
+    campaign_dimension_ready = False
     main_campaign_requested = bool(
         dimension
         and (
@@ -249,12 +309,18 @@ def build_business_plan_bundle(
             questions.append(
                 f"La dimensión de negocio {dimension.label} no está visible en {entity.object}."
             )
+        elif not _supports_contains_filter(snapshot, entity.object, dimension.field):
+            questions.append(
+                f"La dimensión {dimension.label} existe en el reporte Salesforce, pero no está "
+                "disponible/filtrable por SOQL con el usuario actual."
+            )
         elif not campaign_values:
             questions.append(
                 f"¿Qué valores de {dimension.label} deben incluirse en el reporte?"
             )
         else:
             selected_fields.append(dimension.field)
+            campaign_dimension_ready = True
 
     selected_fields = list(dict.fromkeys(selected_fields))
     hidden_fields = list(dict.fromkeys(hidden_fields))
@@ -271,7 +337,7 @@ def build_business_plan_bundle(
     plans: list[SalesforceReportPlan] = []
     for campaign_value in plan_values:
         plan_filters = list(scope_filters)
-        if campaign_value and dimension:
+        if campaign_value and dimension and campaign_dimension_ready:
             plan_filters.append(
                 SalesforceFilter(
                     field=dimension.field,

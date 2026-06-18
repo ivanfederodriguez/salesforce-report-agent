@@ -1,9 +1,13 @@
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+import pytest
 
+import sf_report_agent.graph.nodes as graph_nodes_module
+from sf_report_agent.graph.nodes import ReportGraphNodes
 from sf_report_agent.models.report_request import SalesforceReportRequest
 from sf_report_agent.reports.transforms import apply_derived_fields
 from sf_report_agent.salesforce.business_planner import build_business_plan_bundle
@@ -19,11 +23,13 @@ def _field(
     *,
     reference_to: list[str] | None = None,
     relationship_name: str | None = None,
+    filterable: bool = True,
 ) -> dict[str, Any]:
     return {
         "name": name,
         "label": label,
         "type": field_type,
+        "filterable": filterable,
         "referenceTo": reference_to or [],
         "relationshipName": relationship_name,
     }
@@ -101,6 +107,22 @@ def _request(text: str, *, year: int | None = None) -> SalesforceReportRequest:
         source_text=text,
         report_type="reporte_salesforce",
         year=year,
+    )
+
+
+def _task_23_request() -> SalesforceReportRequest:
+    return SalesforceReportRequest(
+        task_id=23,
+        source_text="Altas 2026 por campaña principal para personas",
+        report_type="altas_por_campaña",
+        year=2026,
+        campaign_names=[
+            "[IND] Campañas Pauta Digital",
+            "[IND] Redes Sociales",
+            "[IND] Redes Sociales - Instagram",
+        ],
+        origin_sources=["amplify", "orgánico web"],
+        person_fields=["nombre_y_apellido"],
     )
 
 
@@ -183,36 +205,140 @@ def test_age_and_province_are_derived_locally() -> None:
     assert result["__derived__.province"].tolist() == ["Santa Fe", "Córdoba"]
 
 
-def test_main_campaign_dimension_does_not_create_technical_lookup_variants() -> None:
+def test_province_uses_only_visible_address_sources() -> None:
     semantics = load_business_semantics(SEMANTICS_PATH)
-    request = SalesforceReportRequest(
-        task_id=23,
-        source_text="Altas 2026 por campaña principal para personas",
-        report_type="altas_por_campaña",
-        year=2026,
-        campaign_names=[
-            "[IND] Campañas Pauta Digital",
-            "[IND] Redes Sociales",
-            "[IND] Redes Sociales - Instagram",
-        ],
-        origin_sources=["amplify", "orgánico web"],
-        person_fields=["nombre_y_apellido"],
-    )
+    schema = _schema()
+    contact_fields = schema["objects"]["Contact"]["fields"]
+    schema["objects"]["Contact"]["fields"] = [
+        field for field in contact_fields if field["name"] != "OtherState"
+    ]
 
-    bundle = build_business_plan_bundle(request, _schema(), semantics)
+    bundle = build_business_plan_bundle(
+        _request("Altas de personas con provincia"), schema, semantics
+    )
 
     assert bundle is not None
     assert not bundle.needs_clarification
-    assert [plan.variant_label for plan in bundle.plans] == [
+    province = next(
+        field for field in bundle.plans[0].derived_fields if field.label == "Provincia"
+    )
+    assert province.source_fields == ["npe03__Contact__r.MailingState"]
+
+
+def test_contact_name_falls_back_to_name_when_first_and_last_are_not_visible() -> None:
+    semantics = load_business_semantics(SEMANTICS_PATH)
+    schema = _schema()
+    contact_fields = schema["objects"]["Contact"]["fields"]
+    schema["objects"]["Contact"]["fields"] = [
+        field
+        for field in contact_fields
+        if field["name"] not in {"FirstName", "LastName"}
+    ]
+
+    bundle = build_business_plan_bundle(
+        _request("Altas de personas con nombre y apellido"), schema, semantics
+    )
+
+    assert bundle is not None
+    assert not bundle.needs_clarification
+    assert "npe03__Contact__r.Name" in bundle.plans[0].selected_fields
+    assert any("como fallback" in warning for warning in bundle.warnings)
+
+
+def test_task_23_generates_exactly_two_main_campaign_business_plans() -> None:
+    semantics = load_business_semantics(SEMANTICS_PATH)
+    bundle = build_business_plan_bundle(_task_23_request(), _schema(), semantics)
+
+    assert bundle is not None
+    assert not bundle.needs_clarification
+    assert len(bundle.plans) == 2
+    assert {plan.variant_label for plan in bundle.plans} == {
         "[IND] Campañas Pauta Digital",
         "[IND] Redes Sociales",
-    ]
+    }
     assert all(
-        any(item.field == "Campa_a_Principal__c" for item in plan.scope_filters)
+        plan.primary_object == "npe03__Recurring_Donation__c"
         for plan in bundle.plans
     )
     assert all(
-        "npe03__Recurring_Donation_Campaign__c" not in plan.campaign_filter_fields
-        and "Campa_a_de_recupero__c" not in plan.campaign_filter_fields
+        any(
+            item.field == "npe03__Contact__c" and item.operator == "not_null"
+            for item in plan.scope_filters
+        )
+        for plan in bundle.plans
+    )
+    assert all(
+        any(
+            item.field == "Campa_a_Principal__c"
+            and item.operator == "contains"
+            and item.values == [plan.variant_label]
+            for item in plan.scope_filters
+        )
+        for plan in bundle.plans
+    )
+    assert all(
+        plan.date_filter_field == "npe03__Date_Established__c"
+        and plan.date_filter_mode == "range"
+        for plan in bundle.plans
+    )
+    assert all(plan.campaign_filter_fields == [] for plan in bundle.plans)
+    assert all(
+        not any(
+            item.field
+            in {
+                "npe03__Recurring_Donation_Campaign__c",
+                "Campa_a_de_recupero__c",
+            }
+            for item in plan.scope_filters
+        )
+        for plan in bundle.plans
+    )
+
+
+def test_non_filterable_main_campaign_needs_clarification_without_technical_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantics = load_business_semantics(SEMANTICS_PATH)
+    schema = _schema()
+    campaign_field = next(
+        field
+        for field in schema["objects"]["npe03__Recurring_Donation__c"]["fields"]
+        if field["name"] == "Campa_a_Principal__c"
+    )
+    campaign_field["filterable"] = False
+
+    def fail_technical_fallback(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("No debe invocarse el planner técnico")
+
+    monkeypatch.setattr(
+        graph_nodes_module, "build_report_plan_bundle", fail_technical_fallback
+    )
+    nodes = ReportGraphNodes(
+        SimpleNamespace(
+            settings=SimpleNamespace(allow_report_without_person_fields=False)
+        )
+    )
+
+    result = nodes.build_report_plan(
+        {
+            "request": _task_23_request(),
+            "schema_snapshot": schema,
+            "business_semantics": semantics,
+            "warnings": [],
+        }
+    )
+
+    bundle = result["plan_bundle"]
+    assert bundle is not None
+    assert bundle.needs_clarification
+    assert all(
+        plan.primary_object == "npe03__Recurring_Donation__c" for plan in bundle.plans
+    )
+    assert bundle.clarification_questions == [
+        "La dimensión Campaña Principal de Origen existe en el reporte Salesforce, "
+        "pero no está disponible/filtrable por SOQL con el usuario actual."
+    ]
+    assert all(
+        not any(item.field == "Campa_a_Principal__c" for item in plan.scope_filters)
         for plan in bundle.plans
     )
