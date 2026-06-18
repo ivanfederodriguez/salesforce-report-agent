@@ -17,11 +17,20 @@ from sf_report_agent.models.task import ExternalTask
 
 class RecurringDonationSalesforceClient(FakeSalesforceClient):
     def describe_object(self, object_name: str) -> dict[str, Any]:
+        if object_name == "Campaign":
+            return {
+                "fields": [
+                    {"name": "Id", "label": "ID de campaña", "type": "id"},
+                    {"name": "Name", "label": "Nombre", "type": "string"},
+                ]
+            }
         if object_name == "Contact":
             return {
                 "fields": [
                     {"name": "Id", "label": "ID del contacto", "type": "id"},
                     {"name": "Name", "label": "Nombre", "type": "string"},
+                    {"name": "FirstName", "label": "Nombre", "type": "string"},
+                    {"name": "LastName", "label": "Apellido", "type": "string"},
                     {
                         "name": "Birthdate",
                         "label": "Fecha de nacimiento",
@@ -29,6 +38,11 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                     },
                     {"name": "MailingCity", "label": "Ciudad", "type": "string"},
                     {"name": "MailingState", "label": "Provincia", "type": "string"},
+                    {
+                        "name": "OtherState",
+                        "label": "Otra provincia",
+                        "type": "string",
+                    },
                     {"name": "MailingCountry", "label": "País", "type": "string"},
                 ]
             }
@@ -40,7 +54,11 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
             {"name": "npe03__Amount__c", "label": "Importe", "type": "currency"},
             {"name": "npsp__Status__c", "label": "Estado", "type": "picklist"},
             {"name": "npsp__StartDate__c", "label": "Fecha inicial", "type": "date"},
-            {"name": "npsp__EndDate__c", "label": "Fecha final", "type": "date"},
+            {
+                "name": "npsp__EndDate__c",
+                "label": "Fecha de finalización",
+                "type": "date",
+            },
             {
                 "name": "npe03__Date_Established__c",
                 "label": "Fecha establecida",
@@ -60,6 +78,11 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                 "type": "reference",
                 "referenceTo": ["Campaign"],
                 "relationshipName": "Campa_a_de_origen__r",
+            },
+            {
+                "name": "Campa_a_Principal__c",
+                "label": "Campaña Principal de Origen",
+                "type": "string",
             },
             {
                 "name": "npe03__Recurring_Donation_Campaign__c",
@@ -95,11 +118,19 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                 "Fecha_de_alta__c": "2026-02-15",
                 "npe03__Contact__r": {
                     "Name": "Persona Uno",
+                    "FirstName": "Persona",
+                    "LastName": "Uno",
                     "Birthdate": "1990-01-01",
                     "MailingCity": "Córdoba",
                     "MailingState": "Córdoba",
+                    "OtherState": None,
                     "MailingCountry": "Argentina",
                 },
+                "Campa_a_Principal__c": (
+                    "[IND] Redes Sociales"
+                    if "[IND] Redes Sociales" in soql
+                    else "[IND] Campañas Pauta Digital"
+                ),
                 "Campa_a_de_origen__c": self.campaign_ids[0],
                 "Campa_a_de_origen__r": {"Name": "[IND] Campañas Pauta Digital"},
                 "npe03__Recurring_Donation_Campaign__c": self.campaign_ids[1],
@@ -125,6 +156,7 @@ def _settings(
     source_db: Path,
     *,
     mapping_path: Path | None = None,
+    business_semantics_path: Path | None = None,
     allow_salesforce_report_create: bool = False,
 ) -> Settings:
     return Settings(
@@ -147,6 +179,7 @@ def _settings(
         update_source_task=False,
         allow_report_without_person_fields=False,
         allow_salesforce_report_create=allow_salesforce_report_create,
+        business_semantics_path=business_semantics_path,
     )
 
 
@@ -156,6 +189,7 @@ def _run(
     fake_salesforce: FakeSalesforceClient,
     *,
     mapping_path: Path,
+    business_semantics_path: Path | None = None,
     dry_run: bool = False,
     allow_salesforce_report_create: bool = False,
 ) -> tuple[ExecutionResult, Settings]:
@@ -166,6 +200,7 @@ def _run(
         tmp_path,
         source_db,
         mapping_path=mapping_path,
+        business_semantics_path=business_semantics_path,
         allow_salesforce_report_create=allow_salesforce_report_create,
     )
     services = AgentServices(
@@ -218,6 +253,7 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
 ) -> None:
     task_23 = micaela_task.model_copy(update={"id": 23})
     mapping_path = Path(__file__).parents[1] / "config" / "field_mapping.json"
+    semantics_path = Path(__file__).parents[1] / "config" / "business_semantics.yaml"
     salesforce = RecurringDonationSalesforceClient()
 
     result, settings = _run(
@@ -225,56 +261,73 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
         task_23,
         salesforce,
         mapping_path=mapping_path,
+        business_semantics_path=semantics_path,
     )
 
     assert settings.field_mapping_path == mapping_path
     assert result.status == "done_pending_approval"
-    assert len(result.variants) == 3
+    assert len(result.variants) == 2
     by_id = {variant.variant_id: variant for variant in result.variants}
-    origin = by_id["campana_de_origen"]
-    future = by_id["campana_para_las_donaciones_futuras"]
-    combined = by_id["combined"]
-    assert "Campa_a_de_origen__c IN" in origin.soql
-    assert "npe03__Recurring_Donation_Campaign__c IN" not in origin.soql.split("WHERE", 1)[1]
-    assert "npe03__Recurring_Donation_Campaign__c IN" in future.soql
-    assert "Campa_a_de_origen__c IN" not in future.soql.split("WHERE", 1)[1]
-    assert "Campa_a_de_origen__c IN" in combined.soql
-    assert "npe03__Recurring_Donation_Campaign__c IN" in combined.soql
-    assert " OR " in combined.soql
+    pauta = by_id["ind_campanas_pauta_digital"]
+    redes = by_id["ind_redes_sociales"]
+    assert "Campa_a_Principal__c LIKE '%[IND] Campañas Pauta Digital%'" in pauta.soql
+    assert "Campa_a_Principal__c LIKE '%[IND] Redes Sociales%'" in redes.soql
     for variant in result.variants:
         assert "FROM npe03__Recurring_Donation__c" in variant.soql
-        assert "CALENDAR_YEAR(npe03__Date_Established__c) = 2026" in variant.soql
+        assert "npe03__Date_Established__c >= 2026-01-01" in variant.soql
+        assert "npe03__Date_Established__c < 2027-01-01" in variant.soql
+        assert "npe03__Contact__c != NULL" in variant.soql
         assert "CampaignId" not in variant.soql
         assert "CloseDate" not in variant.soql
+        where = variant.soql.split("WHERE", 1)[1]
+        assert "npe03__Recurring_Donation_Campaign__c" not in where
+        assert "Campa_a_de_recupero__c" not in where
     for relationship_field in (
-        "npe03__Contact__r.Name",
+        "npe03__Contact__r.FirstName",
+        "npe03__Contact__r.LastName",
         "npe03__Contact__r.Birthdate",
-        "npe03__Contact__r.MailingCity",
         "npe03__Contact__r.MailingState",
-        "npe03__Contact__r.MailingCountry",
+        "npe03__Contact__r.OtherState",
         "Campa_a_de_origen__r.Name",
-        "npe03__Recurring_Donation_Campaign__r.Name",
     ):
         assert all(relationship_field in variant.soql for variant in result.variants)
     assert salesforce.queried_soql == [variant.soql for variant in result.variants]
-    assert "todas las variantes read-only seguras" in result.response_text
-    assert "Campaña de origen" in result.response_text
-    assert "Campaña para las donaciones futuras" in result.response_text
-    assert "Campañas combinadas" in result.response_text
+    assert "informe separado por cada segmento de negocio" in result.response_text
+    assert "[IND] Campañas Pauta Digital" in result.response_text
+    assert "[IND] Redes Sociales" in result.response_text
+    assert "Campaña para las donaciones futuras" not in result.response_text
+    assert "Campañas combinadas" not in result.response_text
     assert all(len(variant.artifacts) == 3 for variant in result.variants)
 
-    origin_csv = next(Path(path) for path in origin.artifacts if path.endswith(".csv"))
-    headers = origin_csv.read_text(encoding="utf-8").splitlines()[0]
-    assert "Importe" in headers
-    assert "Fecha establecida" in headers
-    assert "Contacto: Fecha de nacimiento" in headers
-    assert "Campa_a_de_origen__c" not in headers
+    pauta_csv = next(Path(path) for path in pauta.artifacts if path.endswith(".csv"))
+    headers = pauta_csv.read_text(encoding="utf-8").splitlines()[0]
+    for label in (
+        "Contacto: Nombre",
+        "Contacto: Apellido",
+        "Contacto: Fecha de nacimiento",
+        "Edad",
+        "Provincia",
+        "Fecha establecida",
+        "Estado",
+        "Importe",
+        "Fecha de finalización",
+        "Campaña Principal de Origen",
+        "Campaña de origen: Nombre",
+    ):
+        assert label in headers
+    for api_name in (
+        "npe03__Contact__r.MailingState",
+        "npe03__Contact__r.OtherState",
+        "Campa_a_de_origen__c",
+    ):
+        assert api_name not in headers
 
-    metadata_path = next(Path(path) for path in combined.artifacts if path.endswith(".json"))
+    metadata_path = next(Path(path) for path in pauta.artifacts if path.endswith(".json"))
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-    assert metadata["variant_id"] == "combined"
-    assert metadata["soql"] == combined.soql
+    assert metadata["variant_id"] == "ind_campanas_pauta_digital"
+    assert metadata["soql"] == pauta.soql
     assert metadata["api_name_to_label"]["npe03__Amount__c"] == "Importe"
+    assert metadata["api_name_to_label"]["__derived__.age"] == "Edad"
 
     with sqlite3.connect(settings.worker_db_path) as connection:
         rows = connection.execute(
@@ -284,12 +337,11 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
             "SELECT COUNT(*) FROM report_artifacts"
         ).fetchone()
     assert [row[0] for row in rows] == [
-        "campana_de_origen",
-        "campana_para_las_donaciones_futuras",
-        "combined",
+        "ind_campanas_pauta_digital",
+        "ind_redes_sociales",
     ]
     assert all(json.loads(row[2]) for row in rows)
-    assert artifact_count is not None and artifact_count[0] >= 9
+    assert artifact_count is not None and artifact_count[0] >= 6
 
 
 def test_dry_run_never_queries_salesforce(

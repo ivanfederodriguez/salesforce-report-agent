@@ -10,6 +10,7 @@ def _default_output_formats() -> list[Literal["csv", "xlsx"]]:
 
 class SalesforceReportRequest(BaseModel):
     task_id: int
+    source_text: str = ""
     report_type: str
     year: int | None = None
     date_from: date | None = None

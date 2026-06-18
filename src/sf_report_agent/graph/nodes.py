@@ -16,7 +16,9 @@ from sf_report_agent.graph.state import ReportAgentState
 from sf_report_agent.llm.ollama_client import OllamaClient
 from sf_report_agent.reports.exporters import export_report, write_run_metadata
 from sf_report_agent.reports.quality_checks import run_quality_checks
-from sf_report_agent.reports.transforms import records_to_dataframe
+from sf_report_agent.reports.transforms import apply_derived_fields, records_to_dataframe
+from sf_report_agent.salesforce.business_planner import build_business_plan_bundle
+from sf_report_agent.salesforce.business_semantics import load_business_semantics
 from sf_report_agent.salesforce.client import SalesforceClient
 from sf_report_agent.salesforce.field_mapper import parse_salesforce_request
 from sf_report_agent.salesforce.label_resolver import SalesforceLabelResolver
@@ -61,8 +63,14 @@ class ReportGraphNodes:
             json.dumps(snapshot.get("field_mapping", {}), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+        semantics = (
+            load_business_semantics(self.services.settings.business_semantics_path)
+            if self.services.settings.business_semantics_path
+            else None
+        )
         return {
             "schema_snapshot": snapshot,
+            **({"business_semantics": semantics} if semantics is not None else {}),
             "artifacts": [*state.get("artifacts", []), str(mapping_path)],
             "warnings": list(state.get("warnings", [])) + list(snapshot.get("warnings", [])),
             "status": "schema_resolved",
@@ -87,13 +95,22 @@ class ReportGraphNodes:
         }
 
     def build_report_plan(self, state: ReportAgentState) -> ReportAgentState:
-        bundle = build_report_plan_bundle(
-            state["request"],
-            state["schema_snapshot"],
-            allow_report_without_person_fields=(
-                self.services.settings.allow_report_without_person_fields
-            ),
+        semantics = state.get("business_semantics")
+        bundle = (
+            build_business_plan_bundle(
+                state["request"], state["schema_snapshot"], semantics
+            )
+            if semantics is not None
+            else None
         )
+        if bundle is None:
+            bundle = build_report_plan_bundle(
+                state["request"],
+                state["schema_snapshot"],
+                allow_report_without_person_fields=(
+                    self.services.settings.allow_report_without_person_fields
+                ),
+            )
         primary_plan = bundle.plans[0]
         return {
             "report_plan": primary_plan,
@@ -180,6 +197,7 @@ class ReportGraphNodes:
                 dataframe = pd.DataFrame(columns=plan.selected_fields)
             else:
                 dataframe = dataframe.reindex(columns=plan.selected_fields)
+            dataframe = apply_derived_fields(dataframe, plan.derived_fields)
             records = [
                 {str(key): value for key, value in record.items()}
                 for record in dataframe.to_dict(orient="records")
@@ -256,10 +274,14 @@ class ReportGraphNodes:
         for variant in state["variant_quality_reports"]:
             plan = variant["plan"]
             dataframe = self._variant_dataframe(variant)
+            export_dataframe = dataframe.drop(columns=plan.hidden_fields, errors="ignore")
             api_name_to_label = label_resolver.resolve(
-                plan.primary_object, [str(column) for column in dataframe.columns]
+                plan.primary_object, [str(column) for column in export_dataframe.columns]
             )
-            export_dataframe = dataframe.rename(columns=api_name_to_label)
+            api_name_to_label.update(
+                {field.output_field: field.label for field in plan.derived_fields}
+            )
+            export_dataframe = export_dataframe.rename(columns=api_name_to_label)
             metadata = self._metadata(
                 state,
                 variant=variant,
@@ -270,7 +292,7 @@ class ReportGraphNodes:
             report_paths = export_report(
                 export_dataframe,
                 task_id=state["task_id"],
-                title=f"{plan.title} - {plan.variant_label}",
+                title=plan.title,
                 artifacts_dir=settings.artifacts_dir,
                 output_formats=state["request"].output_formats,
                 metadata=metadata,
@@ -406,18 +428,31 @@ class ReportGraphNodes:
             f"Plan ejecutado: {plan.title}.",
         ]
         bundle = state.get("plan_bundle")
-        if bundle and bundle.ambiguity_note:
-            lines.append(
-                "No estaba seguro de qué interpretación de campaña correspondía, "
-                "así que generé todas las variantes read-only seguras."
+        semantic_segments = bool(
+            bundle
+            and bundle.ambiguity_note
+            and all(
+                (item.ambiguity_reason or "").startswith("Segmentación por")
+                for item in bundle.plans
             )
+        )
+        if bundle and bundle.ambiguity_note:
+            if semantic_segments:
+                lines.append(
+                    "Generé un informe separado por cada segmento de negocio solicitado."
+                )
+            else:
+                lines.append(
+                    "No estaba seguro de qué interpretación de campaña correspondía, "
+                    "así que generé todas las variantes read-only seguras."
+                )
             lines.append(bundle.ambiguity_note)
         campaign_scope = request.campaign_names or request.campaign_ids
         if campaign_scope:
             lines.append("Campañas solicitadas: " + ", ".join(campaign_scope) + ".")
         if request.origin_sources:
             lines.append("Fuentes de origen: " + ", ".join(request.origin_sources) + ".")
-        lines.append("Variantes generadas:")
+        lines.append("Informes generados:" if semantic_segments else "Variantes generadas:")
         for index, result in enumerate(variant_results):
             letter = chr(ord("A") + index) if index < 26 else str(index + 1)
             lines.append(

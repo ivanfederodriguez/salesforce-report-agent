@@ -100,6 +100,7 @@ def parse_salesforce_request(
 
     deterministic: dict[str, Any] = {
         "task_id": task.id,
+        "source_text": text,
         "report_type": report_type,
         "year": year,
         "campaign_ids": campaign_ids,

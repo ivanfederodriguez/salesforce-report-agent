@@ -1,0 +1,161 @@
+version: 1
+
+entities:
+  recurring_donation:
+    object: npe03__Recurring_Donation__c
+    description: Compromiso actual de donación recurrente de una persona.
+    priority: 100
+    terms:
+      - alta
+      - altas
+      - baja
+      - bajas
+      - donante activo
+      - donantes activos
+      - donación recurrente
+      - donaciones recurrentes
+      - cuánto dona actualmente
+      - importe actual
+      - estado actual
+    contact:
+      lookup_field: npe03__Contact__c
+      relationship: npe03__Contact__r
+      required_terms:
+        - persona
+        - personas
+        - donante
+        - donantes
+        - datos personales
+      missing_policy: exclude
+    concepts:
+      signup_date:
+        field: npe03__Date_Established__c
+        label: Fecha establecida
+        terms: [alta, altas, fecha de alta, dados de alta]
+      end_date:
+        field: npsp__EndDate__c
+        label: Fecha de finalización
+        terms: [baja, bajas, cancelación, cancelaciones, dejaron de donar]
+      status:
+        field: npsp__Status__c
+        label: Estado
+        terms: [estado, activo, activos, cerrado, cerrados]
+        values:
+          active:
+            value: Active
+            terms: [donante activo, donantes activos, actualmente activo]
+          closed:
+            value: Closed
+            terms: [baja, bajas, cerrado, cerrados, dejaron de donar]
+      amount:
+        field: npe03__Amount__c
+        label: Importe
+        terms: [importe actual, cuánto dona actualmente, compromiso actual]
+      campaign_origin:
+        field: Campa_a_de_origen__r.Name
+        label: Campaña de origen
+        terms: [campaña de origen, origen]
+      campaign_main_origin:
+        field: Campa_a_Principal__c
+        label: Campaña Principal de Origen
+        terms: [campaña principal, campaña principal de origen]
+
+  opportunity:
+    object: Opportunity
+    description: Donación, pago o cobro efectivamente registrado en un período.
+    priority: 50
+    terms:
+      - pago
+      - pagos
+      - cobro
+      - cobros
+      - cobrabilidad
+      - facturación
+      - importe mensual
+      - donaciones de un mes
+      - pagó en
+      - cobró en
+    concepts:
+      transaction_date:
+        field: CloseDate
+        label: Fecha
+        terms: [mes, período, pago, cobro]
+      amount:
+        field: Amount
+        label: Importe
+        terms: [importe mensual, cuánto pagó, cuánto cobró, facturación]
+
+report_profiles:
+  recurring_donor:
+    entity: recurring_donation
+    terms: [alta, baja, donante, persona, donación recurrente]
+    requires_contact: true
+    fields:
+      - npe03__Date_Established__c
+      - npsp__Status__c
+      - npe03__Amount__c
+      - npsp__EndDate__c
+      - Campa_a_Principal__c
+      - Campa_a_de_origen__r.Name
+    conditional_field_groups:
+      - request_fields: [nombre_y_apellido]
+        terms: [nombre, apellido]
+        fields:
+          - npe03__Contact__r.FirstName
+          - npe03__Contact__r.LastName
+      - request_fields: [fecha_nacimiento_o_edad]
+        terms: [edad, fecha de nacimiento]
+        fields:
+          - npe03__Contact__r.Birthdate
+        derived_fields: [age]
+      - request_fields: [lugar_de_residencia]
+        terms: [provincia, residencia, domicilio]
+        derived_fields: [province]
+
+  opportunity_payments:
+    entity: opportunity
+    terms: [pago, cobro, cobrabilidad, facturación, mes]
+    fields: [Id, CloseDate, Amount, StageName]
+
+derived_fields:
+  age:
+    output_field: __derived__.age
+    label: Edad
+    kind: age_years
+    source_fields: [npe03__Contact__r.Birthdate]
+    terms: [edad, fecha de nacimiento]
+  province:
+    output_field: __derived__.province
+    label: Provincia
+    kind: first_non_empty
+    source_fields:
+      - npe03__Contact__r.MailingState
+      - npe03__Contact__r.OtherState
+    terms: [provincia, residencia, domicilio]
+
+campaign_dimensions:
+  main_origin:
+    entity: recurring_donation
+    field: Campa_a_Principal__c
+    label: Campaña Principal de Origen
+    terms: [campaña principal, campaña principal de origen]
+  origin:
+    entity: recurring_donation
+    field: Campa_a_de_origen__r.Name
+    label: Campaña de origen
+    terms: [campaña de origen]
+
+campaign_groups:
+  - value: "[IND] Campañas Pauta Digital"
+    aliases:
+      - "[IND] Campañas Pauta Digital"
+      - amplify
+      - orgánico web
+  - value: "[IND] Redes Sociales"
+    aliases:
+      - "[IND] Redes Sociales"
+      - "[IND] Redes Sociales - Instagram"
+
+policies:
+  variants_for_technical_lookups: false
+  combined_campaign_variant: false

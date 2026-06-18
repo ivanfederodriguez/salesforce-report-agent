@@ -20,11 +20,21 @@ def validate_report_plan(plan: SalesforceReportPlan) -> list[str]:
         errors.append("Objeto principal inválido")
     if not plan.selected_fields:
         errors.append("El plan no tiene campos seleccionados")
-    if not plan.campaign_ids and not plan.origin_sources:
+    if (
+        not plan.campaign_ids
+        and not plan.origin_sources
+        and not plan.scope_filters
+        and not plan.date_filter_description
+    ):
         errors.append("El plan no tiene campañas ni fuentes de origen")
-    if plan.campaign_ids and not plan.campaign_filter_fields:
+    if plan.campaign_ids and not plan.campaign_filter_fields and not plan.scope_filters:
         errors.append("El plan no tiene mapping para campos de campaña")
-    if plan.origin_sources and not plan.origin_source_field and not plan.campaign_ids:
+    if (
+        plan.origin_sources
+        and not plan.origin_source_field
+        and not plan.campaign_ids
+        and not plan.scope_filters
+    ):
         errors.append("El plan no tiene mapping para campaña de origen/fuente")
     if plan.date_filter_description and not plan.date_filter_field:
         errors.append("El plan no tiene mapping para el campo de fecha")

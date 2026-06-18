@@ -32,7 +32,11 @@ def run_quality_checks(
             for value in dataframe[campaign_column].dropna().unique()
         }
     )
-    missing_campaigns = sorted(set(request.campaign_ids) - set(found_campaigns))
+    missing_campaigns = (
+        sorted(set(request.campaign_ids) - set(found_campaigns))
+        if plan.campaign_filter_fields
+        else []
+    )
     if missing_campaigns:
         warnings.append("Campañas sin filas: " + ", ".join(missing_campaigns))
 

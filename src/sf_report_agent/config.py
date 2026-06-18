@@ -48,11 +48,15 @@ class Settings:
     salesforce_token_path: Path = Path(".salesforce_token.json")
     salesforce_cli_alias: str | None = None
     allow_salesforce_report_create: bool = False
+    business_semantics_path: Path | None = None
 
     @classmethod
     def from_env(cls, env_file: str | Path | None = None) -> Settings:
         load_dotenv(dotenv_path=env_file, override=False)
         mapping_value = os.getenv("FIELD_MAPPING_PATH", "").strip()
+        semantics_value = os.getenv(
+            "BUSINESS_SEMANTICS_PATH", "config/business_semantics.yaml"
+        ).strip()
         settings = cls(
             source_db_path=Path(
                 os.getenv("SOURCE_DB_PATH", "../slack-automatizacion/slack_agent.db")
@@ -60,6 +64,7 @@ class Settings:
             worker_db_path=Path(os.getenv("WORKER_DB_PATH", "salesforce_report_agent.db")),
             artifacts_dir=Path(os.getenv("ARTIFACTS_DIR", "artifacts")),
             field_mapping_path=Path(mapping_value) if mapping_value else None,
+            business_semantics_path=Path(semantics_value) if semantics_value else None,
             model_provider=os.getenv("MODEL_PROVIDER", "ollama"),
             ollama_model=os.getenv("OLLAMA_MODEL", "gemma4:e2b-mlx"),
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/"),

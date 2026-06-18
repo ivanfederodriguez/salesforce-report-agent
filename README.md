@@ -133,9 +133,26 @@ Permisos mínimos recomendados:
 
 No se requieren ni se recomiendan permisos de escritura.
 
-## Schema y field mapping
+## Schema, mapping y semántica de negocio
 
-El resolver describe objetos candidatos y solo usa campos visibles. El mapping aporta pistas semánticas; `describe` es la verdad técnica para API names, tipos, labels y relaciones. El ejemplo está en [`config/field_mapping.example.json`](config/field_mapping.example.json). Para usar un mapping revisado:
+El resolver describe objetos candidatos y solo usa campos visibles. `describe` es la verdad técnica para API names, tipos, labels y relaciones; [`config/business_semantics.yaml`](config/business_semantics.yaml) define qué significan para el negocio conceptos como alta, baja, donación recurrente, pago, Contact, importe actual y campaña principal. El mapping JSON queda como respaldo técnico y compatibilidad para pedidos que no matchean la ontología.
+
+```dotenv
+BUSINESS_SEMANTICS_PATH=config/business_semantics.yaml
+```
+
+La semántica es configuración validada, no lógica ligada a un task ID. El planner la combina con el pedido parseado y con metadata real para elegir entidad, fecha, importe, política de Contact, dimensión de campaña y campos derivados. Si un campo configurado no está visible, no lo inventa: lo omite con advertencia o solicita aclaración según el riesgo.
+
+El archivo permite configurar:
+
+- entidades de negocio, sus términos y conceptos;
+- perfiles de columnas por tipo de informe;
+- valores de estado y políticas para registros sin Contact;
+- dimensiones y agrupadores de campañas;
+- campos derivados como Edad y Provincia;
+- políticas de variantes semánticas.
+
+Para usar un mapping técnico revisado, el ejemplo está en [`config/field_mapping.example.json`](config/field_mapping.example.json):
 
 ```dotenv
 FIELD_MAPPING_PATH=config/field_mapping.json
@@ -143,7 +160,9 @@ FIELD_MAPPING_PATH=config/field_mapping.json
 
 Un valor `null` produce una advertencia y, si el campo fue solicitado, una aclaración; el agente no inventa campos. Las fuentes de origen también requieren mapping explícito, por ejemplo `"campaña_origen": "LeadSource"` dentro de `donation.fields`.
 
-El objeto de donación puede definir `date_field` para el filtro anual y uno o más `campaign_filter_fields`. Si metadata expone varios lookups seguros a Campaign, el planner genera una variante por lookup y otra combinada con `OR`; no frena por una ambigüedad read-only y acotada. `campaign_relationships` permite incluir el nombre relacionado en el `SELECT`, sin asumir `CampaignId`, `CloseDate` ni nombres de relaciones universales. El mapping real NPSP está en [`config/field_mapping.json`](config/field_mapping.json), donde `npe03__Date_Established__c` representa la fecha de alta.
+Con semántica de negocio activa, múltiples lookups técnicos a Campaign no generan variantes. Por ejemplo, una campaña principal se filtra por `Campa_a_Principal__c`; campaña futura o recupero solo se usan si el pedido los menciona y la ontología los define. Las variantes se reservan para interpretaciones de negocio reales o para segmentos solicitados. El fallback basado en mapping todavía admite `date_field`, `campaign_filter_fields` y `campaign_relationships`, sin asumir `CampaignId`, `CloseDate` ni relaciones universales.
+
+Edad se calcula localmente desde Birthdate y Provincia toma el primer campo de estado/provincia no vacío configurado. Sus dependencias técnicas viajan en el `SELECT`, pero se ocultan del export cuando no son columnas pedidas.
 
 Antes de exportar, los API names se renombran con los labels reales de Salesforce. Para relaciones se combina el label del lookup y el campo relacionado, por ejemplo `Contacto: Fecha de nacimiento`. Cada metadata JSON conserva el diccionario `api_name_to_label` para auditoría.
 
@@ -194,7 +213,7 @@ START -> load_task -> parse_request -> resolve_salesforce_schema
       -> compose_response -> persist_result -> END
 ```
 
-Cada corrida y cada variante quedan auditadas en `salesforce_report_agent.db`. Los reportes se escriben en:
+Cada corrida y cada segmento o variante semántica queda auditado en `salesforce_report_agent.db`. Los reportes se escriben en:
 
 - `artifacts/reports/task_<id>_<slug>_<timestamp>.csv`;
 - `artifacts/reports/task_<id>_<slug>_<timestamp>.xlsx`;
@@ -224,4 +243,4 @@ ruff check .
 mypy src
 ```
 
-La suite cubre extracción de IDs, parsing, bundles de planes, variantes SOQL seguras, labels de metadata, exports múltiples, persistencia por variante, permission doctor y el grafo completo con Salesforce simulado y artifacts reales.
+La suite cubre carga de la ontología, selección de entidad/fecha/importe, Contact obligatorio, Edad y Provincia derivadas, segmentación por campaña principal, extracción de IDs, parsing, bundles de planes, SOQL seguro, labels de metadata, exports múltiples, persistencia, permission doctor y el grafo completo con Salesforce simulado y artifacts reales.
