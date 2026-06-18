@@ -65,10 +65,10 @@ def test_settings_sf_cli_requires_alias(tmp_path: Path, monkeypatch: pytest.Monk
 
 
 def test_load_salesforce_cli_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, Any] = {}
+    calls: list[dict[str, Any]] = []
 
     def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        captured.update({"command": command, **kwargs})
+        calls.append({"command": command, **kwargs})
         return subprocess.CompletedProcess(
             command,
             0,
@@ -76,7 +76,8 @@ def test_load_salesforce_cli_session(monkeypatch: pytest.MonkeyPatch) -> None:
                 '{"status": 0, "result": {'
                 '"accessToken": "cli-access-secret", '
                 '"instanceUrl": "https://example.my.salesforce.com/", '
-                '"username": "user@example.org"}}'
+                '"username": "user@example.org", '
+                '"id": "00D000000000001"}}'
             ),
             stderr="",
         )
@@ -85,7 +86,8 @@ def test_load_salesforce_cli_session(monkeypatch: pytest.MonkeyPatch) -> None:
 
     session = load_salesforce_cli_session("techo")
 
-    assert captured["command"] == [
+    assert len(calls) == 1
+    assert calls[0]["command"] == [
         "sf",
         "org",
         "display",
@@ -93,13 +95,117 @@ def test_load_salesforce_cli_session(monkeypatch: pytest.MonkeyPatch) -> None:
         "techo",
         "--json",
     ]
-    assert captured["capture_output"] is True
-    assert captured["check"] is False
+    assert calls[0]["capture_output"] is True
+    assert calls[0]["check"] is False
     assert session == SalesforceCliSession(
         access_token="cli-access-secret",
         instance_url="https://example.my.salesforce.com",
         username="user@example.org",
+        org_id="00D000000000001",
     )
+
+
+def test_load_salesforce_cli_session_uses_fallback_for_redacted_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[1:3] == ["org", "display"]:
+            stdout = (
+                '{"status": 0, "result": {'
+                '"accessToken": "[REDACTED] Use sf org auth show-access-token to view", '
+                '"instanceUrl": "https://example.my.salesforce.com", '
+                '"username": "user@example.org", "id": "00D000000000001"}}'
+            )
+        else:
+            stdout = (
+                '{"status": 0, "result": {'
+                '"accessToken": "fallback-access-secret"}}'
+            )
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(sf_cli_module.subprocess, "run", fake_run)
+
+    session = load_salesforce_cli_session("techo")
+
+    assert calls == [
+        ["sf", "org", "display", "--target-org", "techo", "--json"],
+        [
+            "sf",
+            "org",
+            "auth",
+            "show-access-token",
+            "--target-org",
+            "techo",
+            "--json",
+        ],
+    ]
+    assert session == SalesforceCliSession(
+        access_token="fallback-access-secret",
+        instance_url="https://example.my.salesforce.com",
+        username="user@example.org",
+        org_id="00D000000000001",
+    )
+
+
+def test_load_salesforce_cli_session_handles_fallback_failure_without_raw_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        if command[1:3] == ["org", "display"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=(
+                    '{"status": 0, "result": {'
+                    '"accessToken": "[REDACTED]", '
+                    '"instanceUrl": "https://example.my.salesforce.com"}}'
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            command,
+            1,
+            stdout='{"status": 1, "message": "fallback-access-secret"}',
+            stderr="another-secret",
+        )
+
+    monkeypatch.setattr(sf_cli_module.subprocess, "run", fake_run)
+
+    with pytest.raises(SalesforceCliError) as raised:
+        load_salesforce_cli_session("techo")
+
+    assert "recuperar el access token" in str(raised.value)
+    assert "fallback-access-secret" not in str(raised.value)
+    assert "another-secret" not in str(raised.value)
+
+
+def test_load_salesforce_cli_session_handles_missing_cli(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError
+
+    monkeypatch.setattr(sf_cli_module.subprocess, "run", fake_run)
+
+    with pytest.raises(SalesforceCliError, match="No se encontró Salesforce CLI"):
+        load_salesforce_cli_session("techo")
+
+
+def test_load_salesforce_cli_session_handles_invalid_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(command, 0, stdout="not-json", stderr="secret")
+
+    monkeypatch.setattr(sf_cli_module.subprocess, "run", fake_run)
+
+    with pytest.raises(SalesforceCliError, match="respuesta JSON inválida") as raised:
+        load_salesforce_cli_session("techo")
+
+    assert "secret" not in str(raised.value)
 
 
 def test_load_salesforce_cli_session_handles_cli_error_without_raw_output(
@@ -178,4 +284,3 @@ def test_sf_auth_status_checks_cli_without_printing_token(
     assert "techo" in rendered
     assert "Sesión Salesforce CLI válida" in rendered
     assert "cli-access-secret" not in rendered
-

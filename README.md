@@ -102,7 +102,7 @@ python -m sf_report_agent.main sf-auth-status
 python -m sf_report_agent.main sf-doctor
 ```
 
-En cada ejecución, el agente pide a `sf org display --target-org techo --json` una sesión vigente y usa el access token solo en memoria. No lo imprime, no lo copia a `.env` y no lo guarda en artifacts. Si la sesión dejó de ser válida, repetí `sf org login web --instance-url https://login.salesforce.com --alias techo`.
+En cada ejecución, el agente pide a `sf org display --target-org techo --json` los datos de la org. Si Salesforce CLI entrega el token oculto, lo recupera con `sf org auth show-access-token --target-org techo --json`; no requiere `SF_TEMP_SHOW_SECRETS=true`. El access token se usa solo en memoria: no se imprime, no se copia a `.env` y no se guarda en artifacts. Si la sesión dejó de ser válida, repetí `sf org login web --instance-url https://login.salesforce.com --alias techo`.
 
 Este modo no reduce los permisos del usuario autenticado en Salesforce; la garantía read-only sigue estando en el cliente y los validadores del agente.
 
