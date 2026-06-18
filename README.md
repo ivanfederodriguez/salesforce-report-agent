@@ -164,7 +164,9 @@ Con semántica de negocio activa, múltiples lookups técnicos a Campaign no gen
 
 Cuando la semántica selecciona una entidad, las dudas de campos o permisos permanecen en ese planner y producen `needs_clarification`; no reactivan variantes del planner técnico. Las dimensiones usadas con `LIKE` también deben estar marcadas como `filterable` por describe. Si la dimensión existe pero no es filtrable para el usuario, el agente lo informa y no ejecuta la consulta.
 
-Edad se calcula localmente desde Birthdate y Provincia toma el primer campo de estado/provincia visible y no vacío configurado. Sus dependencias técnicas viajan en el `SELECT`, pero se ocultan del export cuando no son columnas pedidas. Los perfiles también pueden declarar `fallback_fields`; el perfil actual usa `Contact.Name` con advertencia si `FirstName` o `LastName` no están visibles.
+Edad se calcula localmente desde Birthdate y admite las estrategias `floor`, `round` y `calendar_age`; el dominio actual configura `round` para reproducir la fórmula redondeada del reporte Salesforce. Provincia toma el primer campo de estado/provincia visible y no vacío configurado. Sus dependencias técnicas viajan en el `SELECT`, pero se ocultan del export cuando no son columnas pedidas. Los perfiles también pueden declarar `fallback_fields`; el perfil actual usa `Contact.Name` con advertencia si `FirstName` o `LastName` no están visibles.
+
+El export aplica `output_order` del profile, traduce picklists con los labels de describe y los overrides de negocio (por ejemplo `Active` → `Activo`), y elimina HTML de las celdas antes de escribir CSV/XLSX. En relaciones terminadas en `.Name` usa directamente el label del lookup, por ejemplo `Campaña de origen`.
 
 Antes de exportar, los API names se renombran con los labels reales de Salesforce. Para relaciones se combina el label del lookup y el campo relacionado, por ejemplo `Contacto: Fecha de nacimiento`. Cada metadata JSON conserva el diccionario `api_name_to_label` para auditoría.
 

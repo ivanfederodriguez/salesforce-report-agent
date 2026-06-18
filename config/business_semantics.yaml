@@ -43,9 +43,11 @@ entities:
         values:
           active:
             value: Active
+            label: Activo
             terms: [donante activo, donantes activos, actualmente activo]
           closed:
             value: Closed
+            label: Cerrado
             terms: [baja, bajas, cerrado, cerrados, dejaron de donar]
       amount:
         field: npe03__Amount__c
@@ -113,6 +115,19 @@ report_profiles:
       - request_fields: [lugar_de_residencia]
         terms: [provincia, residencia, domicilio]
         derived_fields: [province]
+    output_order:
+      - npe03__Contact__r.FirstName
+      - npe03__Contact__r.LastName
+      - npe03__Contact__r.Name
+      - npe03__Contact__r.Birthdate
+      - __derived__.age
+      - __derived__.province
+      - npe03__Date_Established__c
+      - npsp__Status__c
+      - npe03__Amount__c
+      - npsp__EndDate__c
+      - Campa_a_Principal__c
+      - Campa_a_de_origen__r.Name
 
   opportunity_payments:
     entity: opportunity
@@ -124,6 +139,7 @@ derived_fields:
     output_field: __derived__.age
     label: Edad
     kind: age_years
+    strategy: round
     source_fields: [npe03__Contact__r.Birthdate]
     terms: [edad, fecha de nacimiento]
   province:

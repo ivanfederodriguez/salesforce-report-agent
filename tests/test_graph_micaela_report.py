@@ -1,3 +1,4 @@
+import csv
 import json
 import sqlite3
 from pathlib import Path
@@ -52,7 +53,15 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
             {"name": "Id", "label": "ID de donación recurrente", "type": "id"},
             {"name": "Name", "label": "Nombre", "type": "string"},
             {"name": "npe03__Amount__c", "label": "Importe", "type": "currency"},
-            {"name": "npsp__Status__c", "label": "Estado", "type": "picklist"},
+            {
+                "name": "npsp__Status__c",
+                "label": "Estado",
+                "type": "picklist",
+                "picklistValues": [
+                    {"value": "Active", "label": "Activo", "active": True},
+                    {"value": "Closed", "label": "Cerrado", "active": True},
+                ],
+            },
             {"name": "npsp__StartDate__c", "label": "Fecha inicial", "type": "date"},
             {
                 "name": "npsp__EndDate__c",
@@ -112,7 +121,7 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                 "attributes": {"type": "npe03__Recurring_Donation__c"},
                 "Id": "a0R000000000001",
                 "npe03__Amount__c": 1500,
-                "npsp__Status__c": "Activa",
+                "npsp__Status__c": "Active",
                 "npsp__StartDate__c": "2026-02-15",
                 "npsp__EndDate__c": None,
                 "npe03__Date_Established__c": "2026-02-10",
@@ -128,9 +137,9 @@ class RecurringDonationSalesforceClient(FakeSalesforceClient):
                     "MailingCountry": "Argentina",
                 },
                 "Campa_a_Principal__c": (
-                    "[IND] Redes Sociales"
+                    '<a href="/campaign/redes">[IND] Redes Sociales</a>'
                     if "[IND] Redes Sociales" in soql
-                    else "[IND] Campañas Pauta Digital"
+                    else '<a href="/campaign/pauta">[IND] Campañas Pauta Digital</a>'
                 ),
                 "Campa_a_de_origen__c": self.campaign_ids[0],
                 "Campa_a_de_origen__r": {"Name": "[IND] Campañas Pauta Digital"},
@@ -314,8 +323,8 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
     assert all(len(variant.artifacts) == 3 for variant in result.variants)
 
     pauta_csv = next(Path(path) for path in pauta.artifacts if path.endswith(".csv"))
-    headers = pauta_csv.read_text(encoding="utf-8").splitlines()[0]
-    for label in (
+    pauta_xlsx = next(Path(path) for path in pauta.artifacts if path.endswith(".xlsx"))
+    expected_headers = [
         "Contacto: Nombre",
         "Contacto: Apellido",
         "Contacto: Fecha de nacimiento",
@@ -326,15 +335,31 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
         "Importe",
         "Fecha de finalización",
         "Campaña Principal de Origen",
-        "Campaña de origen: Nombre",
-    ):
-        assert label in headers
+        "Campaña de origen",
+    ]
+    with pauta_csv.open(encoding="utf-8", newline="") as handle:
+        csv_rows = list(csv.DictReader(handle))
+    assert list(csv_rows[0]) == expected_headers
+    assert csv_rows[0]["Estado"] == "Activo"
+    assert csv_rows[0]["Campaña Principal de Origen"] == (
+        "[IND] Campañas Pauta Digital"
+    )
+    assert "<a " not in pauta_csv.read_text(encoding="utf-8")
+
+    worksheet = openpyxl.load_workbook(pauta_xlsx, read_only=True)["datos"]
+    xlsx_rows = list(worksheet.iter_rows(values_only=True))
+    assert list(xlsx_rows[0]) == expected_headers
+    xlsx_first = dict(zip(expected_headers, xlsx_rows[1], strict=True))
+    assert xlsx_first["Estado"] == "Activo"
+    assert xlsx_first["Campaña Principal de Origen"] == (
+        "[IND] Campañas Pauta Digital"
+    )
     for api_name in (
         "npe03__Contact__r.MailingState",
         "npe03__Contact__r.OtherState",
         "Campa_a_de_origen__c",
     ):
-        assert api_name not in headers
+        assert api_name not in expected_headers
 
     metadata_path = next(Path(path) for path in pauta.artifacts if path.endswith(".json"))
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -342,6 +367,13 @@ def test_task_23_uses_recurring_donation_mapping_and_real_fields(
     assert metadata["soql"] == pauta.soql
     assert metadata["api_name_to_label"]["npe03__Amount__c"] == "Importe"
     assert metadata["api_name_to_label"]["__derived__.age"] == "Edad"
+    assert metadata["value_labels"]["npsp__Status__c"]["Active"] == "Activo"
+    assert metadata["output_order"][:4] == [
+        "npe03__Contact__r.FirstName",
+        "npe03__Contact__r.LastName",
+        "npe03__Contact__r.Name",
+        "npe03__Contact__r.Birthdate",
+    ]
 
     with sqlite3.connect(settings.worker_db_path) as connection:
         rows = connection.execute(

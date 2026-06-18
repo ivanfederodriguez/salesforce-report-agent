@@ -23,6 +23,7 @@ def contains_term(text: str, terms: list[str]) -> bool:
 
 class SemanticValue(BaseModel):
     value: str
+    label: str | None = None
     terms: list[str] = Field(default_factory=list)
 
 
@@ -63,6 +64,7 @@ class ReportProfile(BaseModel):
     fields: list[str] = Field(default_factory=list)
     derived_fields: list[str] = Field(default_factory=list)
     conditional_field_groups: list[ConditionalFieldGroup] = Field(default_factory=list)
+    output_order: list[str] = Field(default_factory=list)
     requires_contact: bool = False
 
 
@@ -71,6 +73,7 @@ class DerivedFieldDefinition(BaseModel):
     label: str
     kind: Literal["age_years", "first_non_empty"]
     source_fields: list[str]
+    strategy: Literal["floor", "round", "calendar_age"] | None = None
     terms: list[str] = Field(default_factory=list)
 
 

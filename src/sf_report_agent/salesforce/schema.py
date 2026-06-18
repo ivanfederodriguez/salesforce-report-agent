@@ -87,6 +87,15 @@ class SchemaResolver:
                         "label": field.get("label"),
                         "type": field.get("type"),
                         "filterable": field.get("filterable"),
+                        "picklistValues": [
+                            {
+                                "value": item.get("value"),
+                                "label": item.get("label"),
+                                "active": item.get("active"),
+                            }
+                            for item in field.get("picklistValues", [])
+                            if isinstance(item, dict)
+                        ],
                         "referenceTo": field.get("referenceTo", []),
                         "relationshipName": field.get("relationshipName"),
                     }

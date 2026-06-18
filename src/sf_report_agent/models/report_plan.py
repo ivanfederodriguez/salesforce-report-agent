@@ -15,6 +15,7 @@ class DerivedFieldPlan(BaseModel):
     label: str
     kind: Literal["age_years", "first_non_empty"]
     source_fields: list[str]
+    strategy: Literal["floor", "round", "calendar_age"] | None = None
 
 
 class SalesforceReportPlan(BaseModel):
@@ -39,6 +40,8 @@ class SalesforceReportPlan(BaseModel):
     joins_or_relationships: list[str] = Field(default_factory=list)
     derived_fields: list[DerivedFieldPlan] = Field(default_factory=list)
     hidden_fields: list[str] = Field(default_factory=list)
+    output_order: list[str] = Field(default_factory=list)
+    value_labels: dict[str, dict[str, str]] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
     needs_clarification: bool = False
     clarification_questions: list[str] = Field(default_factory=list)

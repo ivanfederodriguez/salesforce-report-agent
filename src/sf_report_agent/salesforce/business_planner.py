@@ -94,6 +94,29 @@ def _supports_contains_filter(
     }
 
 
+def _metadata_value_labels(
+    snapshot: dict[str, Any], object_name: str, field_name: str
+) -> dict[str, str]:
+    field = next(
+        (
+            value
+            for value in _object_fields(snapshot, object_name)
+            if value.get("name") == field_name
+        ),
+        None,
+    )
+    if field is None:
+        return {}
+    values = field.get("picklistValues", [])
+    if not isinstance(values, list):
+        return {}
+    return {
+        str(item["value"]): str(item["label"])
+        for item in values
+        if isinstance(item, dict) and item.get("value") and item.get("label")
+    }
+
+
 def _select_date_concept(entity: BusinessEntity, text: str) -> str | None:
     preferred = [
         name
@@ -231,6 +254,7 @@ def build_business_plan_bundle(
                 label=definition.label,
                 kind=definition.kind,
                 source_fields=visible_sources,
+                strategy=definition.strategy,
             )
         )
 
@@ -324,6 +348,24 @@ def build_business_plan_bundle(
 
     selected_fields = list(dict.fromkeys(selected_fields))
     hidden_fields = list(dict.fromkeys(hidden_fields))
+    value_labels = {
+        field_name: labels
+        for field_name in selected_fields
+        if (labels := _metadata_value_labels(snapshot, entity.object, field_name))
+    }
+    for concept in entity.concepts.values():
+        if concept.field not in selected_fields:
+            continue
+        semantic_labels = {
+            value.value: value.label
+            for value in concept.values.values()
+            if value.label
+        }
+        if semantic_labels:
+            value_labels[concept.field] = {
+                **value_labels.get(concept.field, {}),
+                **semantic_labels,
+            }
     needs_clarification = bool(questions)
     title_base = "Informe de " + (
         "Altas" if date_concept_name == "signup_date" else
@@ -376,6 +418,8 @@ def build_business_plan_bundle(
                 joins_or_relationships=joins,
                 derived_fields=derived_fields,
                 hidden_fields=hidden_fields,
+                output_order=list(profile.output_order) if profile else [],
+                value_labels=value_labels,
                 warnings=warnings,
                 needs_clarification=needs_clarification,
                 clarification_questions=questions,

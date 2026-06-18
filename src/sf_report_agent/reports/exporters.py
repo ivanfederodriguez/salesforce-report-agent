@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+from sf_report_agent.reports.transforms import clean_html_cells
 
 
 def _slug(value: str) -> str:
@@ -32,6 +36,37 @@ def _metadata_rows(metadata: dict[str, Any]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _style_worksheet(worksheet: Any, *, metadata_sheet: bool = False) -> None:
+    worksheet.freeze_panes = "A2"
+    worksheet.sheet_view.showGridLines = False
+    worksheet.auto_filter.ref = worksheet.dimensions
+    header_fill = PatternFill(fill_type="solid", fgColor="1F4E78")
+    for cell in worksheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+    worksheet.row_dimensions[1].height = 30
+
+    for index, column in enumerate(worksheet.iter_cols(), start=1):
+        values = [str(cell.value) for cell in column if cell.value is not None]
+        longest = max((len(value) for value in values), default=0)
+        if metadata_sheet and index == 2:
+            width = 80
+            for cell in column[1:]:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        else:
+            width = min(max(longest + 2, 12), 34)
+        worksheet.column_dimensions[get_column_letter(index)].width = width
+
+    headers = {str(cell.value): cell.column for cell in worksheet[1] if cell.value}
+    for header, number_format in {"Edad": "0", "Importe": "#,##0.00"}.items():
+        column_index = headers.get(header)
+        if column_index is None:
+            continue
+        for row in range(2, worksheet.max_row + 1):
+            worksheet.cell(row=row, column=column_index).number_format = number_format
+
+
 def export_report(
     dataframe: pd.DataFrame,
     *,
@@ -43,6 +78,7 @@ def export_report(
     warnings: list[str],
     generated_at: datetime | None = None,
 ) -> list[Path]:
+    dataframe = clean_html_cells(dataframe)
     generated_at = generated_at or datetime.now(UTC)
     directory = artifacts_dir / "reports"
     directory.mkdir(parents=True, exist_ok=True)
@@ -63,6 +99,10 @@ def export_report(
                 pd.DataFrame({"warning": warnings}).to_excel(
                     writer, sheet_name="warnings", index=False
                 )
+            _style_worksheet(writer.sheets["datos"])
+            _style_worksheet(writer.sheets["metadata"], metadata_sheet=True)
+            if warnings:
+                _style_worksheet(writer.sheets["warnings"], metadata_sheet=True)
         paths.append(xlsx_path)
     return paths
 

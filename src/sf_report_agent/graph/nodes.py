@@ -16,7 +16,11 @@ from sf_report_agent.graph.state import ReportAgentState
 from sf_report_agent.llm.ollama_client import OllamaClient
 from sf_report_agent.reports.exporters import export_report, write_run_metadata
 from sf_report_agent.reports.quality_checks import run_quality_checks
-from sf_report_agent.reports.transforms import apply_derived_fields, records_to_dataframe
+from sf_report_agent.reports.transforms import (
+    apply_derived_fields,
+    prepare_export_dataframe,
+    records_to_dataframe,
+)
 from sf_report_agent.salesforce.business_planner import build_business_plan_bundle
 from sf_report_agent.salesforce.business_semantics import load_business_semantics
 from sf_report_agent.salesforce.client import SalesforceClient
@@ -275,6 +279,24 @@ class ReportGraphNodes:
             plan = variant["plan"]
             dataframe = self._variant_dataframe(variant)
             export_dataframe = dataframe.drop(columns=plan.hidden_fields, errors="ignore")
+            value_labels = label_resolver.resolve_value_labels(
+                plan.primary_object, [str(column) for column in export_dataframe.columns]
+            )
+            for field_name, labels in plan.value_labels.items():
+                value_labels[field_name] = {
+                    **value_labels.get(field_name, {}),
+                    **labels,
+                }
+            export_dataframe = prepare_export_dataframe(
+                export_dataframe,
+                value_labels=value_labels,
+                output_order=plan.output_order,
+                integer_fields=[
+                    field.output_field
+                    for field in plan.derived_fields
+                    if field.kind == "age_years"
+                ],
+            )
             api_name_to_label = label_resolver.resolve(
                 plan.primary_object, [str(column) for column in export_dataframe.columns]
             )
@@ -287,6 +309,7 @@ class ReportGraphNodes:
                 variant=variant,
                 generated_at=generated_at,
                 api_name_to_label=api_name_to_label,
+                value_labels=value_labels,
             )
             variant_warnings = list(variant["quality_report"]["warnings"])
             report_paths = export_report(
@@ -343,6 +366,7 @@ class ReportGraphNodes:
         variant: dict[str, Any],
         generated_at: datetime,
         api_name_to_label: dict[str, str],
+        value_labels: dict[str, dict[str, str]],
     ) -> dict[str, Any]:
         client = self.services.salesforce_client
         mapping = state["schema_snapshot"].get("field_mapping", {})
@@ -362,6 +386,8 @@ class ReportGraphNodes:
             "origin_sources": state["request"].origin_sources,
             "report_title": plan.title,
             "api_name_to_label": api_name_to_label,
+            "output_order": plan.output_order,
+            "value_labels": value_labels,
             "warnings": variant["quality_report"]["warnings"],
             "field_mapping_used": mapping,
             "quality_checks": variant["quality_report"],

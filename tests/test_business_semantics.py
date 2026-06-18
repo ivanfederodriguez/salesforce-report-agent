@@ -8,6 +8,7 @@ import pytest
 
 import sf_report_agent.graph.nodes as graph_nodes_module
 from sf_report_agent.graph.nodes import ReportGraphNodes
+from sf_report_agent.models.report_plan import DerivedFieldPlan
 from sf_report_agent.models.report_request import SalesforceReportRequest
 from sf_report_agent.reports.transforms import apply_derived_fields
 from sf_report_agent.salesforce.business_planner import build_business_plan_bundle
@@ -201,8 +202,33 @@ def test_age_and_province_are_derived_locally() -> None:
 
     result = apply_derived_fields(dataframe, plan.derived_fields, as_of=date(2026, 6, 18))
 
+    age = next(field for field in plan.derived_fields if field.label == "Edad")
+    assert age.strategy == "round"
     assert result["__derived__.age"].tolist() == [26, 36]
     assert result["__derived__.province"].tolist() == ["Santa Fe", "Córdoba"]
+
+
+def test_age_years_supports_round_floor_and_calendar_age() -> None:
+    dataframe = pd.DataFrame({"Birthdate": ["2000-12-01"]})
+
+    values = {}
+    for strategy in ("floor", "round", "calendar_age"):
+        result = apply_derived_fields(
+            dataframe,
+            [
+                DerivedFieldPlan(
+                    output_field="Age",
+                    label="Edad",
+                    kind="age_years",
+                    source_fields=["Birthdate"],
+                    strategy=strategy,
+                )
+            ],
+            as_of=date(2026, 6, 18),
+        )
+        values[strategy] = result.loc[0, "Age"]
+
+    assert values == {"floor": 25, "round": 26, "calendar_age": 25}
 
 
 def test_province_uses_only_visible_address_sources() -> None:
@@ -282,6 +308,25 @@ def test_task_23_generates_exactly_two_main_campaign_business_plans() -> None:
         for plan in bundle.plans
     )
     assert all(plan.campaign_filter_fields == [] for plan in bundle.plans)
+    assert all(
+        plan.value_labels["npsp__Status__c"] == {
+            "Active": "Activo",
+            "Closed": "Cerrado",
+        }
+        for plan in bundle.plans
+    )
+    assert all(
+        plan.output_order[:6]
+        == [
+            "npe03__Contact__r.FirstName",
+            "npe03__Contact__r.LastName",
+            "npe03__Contact__r.Name",
+            "npe03__Contact__r.Birthdate",
+            "__derived__.age",
+            "__derived__.province",
+        ]
+        for plan in bundle.plans
+    )
     assert all(
         not any(
             item.field

@@ -22,6 +22,24 @@ class SalesforceLabelResolver:
         }
         return self._disambiguate(labels)
 
+    def resolve_value_labels(
+        self, primary_object: str, fields: list[str]
+    ) -> dict[str, dict[str, str]]:
+        resolved: dict[str, dict[str, str]] = {}
+        for field_name in fields:
+            if "." in field_name:
+                continue
+            field = self._field(primary_object, field_name)
+            values = field.get("picklistValues", []) if field else []
+            labels = {
+                str(item["value"]): str(item["label"])
+                for item in values
+                if isinstance(item, dict) and item.get("value") and item.get("label")
+            }
+            if labels:
+                resolved[field_name] = labels
+        return resolved
+
     def _object_fields(self, object_name: str) -> list[dict[str, Any]]:
         fields = (
             self.schema_snapshot.get("objects", {}).get(object_name, {}).get("fields", [])
@@ -62,6 +80,8 @@ class SalesforceLabelResolver:
             None,
         )
         lookup_label = self._label(lookup, relationship_name)
+        if related_field_name == "Name":
+            return lookup_label
         references = lookup.get("referenceTo", []) if lookup else []
         related_object = (
             str(references[0])
