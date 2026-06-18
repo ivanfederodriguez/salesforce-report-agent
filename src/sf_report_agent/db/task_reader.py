@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -104,6 +105,26 @@ class TaskReader:
                 """
             ).fetchone()
             return self._row_to_task(connection, row) if row is not None else None
+
+    def list_pending_salesforce_tasks(self, statuses: Sequence[str]) -> list[ExternalTask]:
+        normalized_statuses = tuple(
+            dict.fromkeys(status.strip().casefold() for status in statuses if status.strip())
+        )
+        if not normalized_statuses:
+            raise ValueError("Debe indicarse al menos un status de tarea fuente")
+        placeholders = ", ".join("?" for _ in normalized_statuses)
+        with self._connect() as connection:
+            self.validate_schema(connection)
+            rows = connection.execute(
+                f"""
+                SELECT * FROM tasks
+                WHERE lower(trim(category)) = 'salesforce'
+                  AND lower(trim(coalesce(status, 'new'))) IN ({placeholders})
+                ORDER BY id ASC
+                """,
+                normalized_statuses,
+            ).fetchall()
+            return [self._row_to_task(connection, row) for row in rows]
 
     def _row_to_task(self, connection: sqlite3.Connection, row: sqlite3.Row) -> ExternalTask:
         raw_classification = row["classification_json"] or "{}"

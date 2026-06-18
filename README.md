@@ -198,6 +198,9 @@ python -m sf_report_agent.main run-task --task-id 123 --dry-run
 python -m sf_report_agent.main run-task --task-id 123
 python -m sf_report_agent.main run-once --dry-run
 python -m sf_report_agent.main run-once
+python -m sf_report_agent.main run-pending --limit 10
+python -m sf_report_agent.main run-pending --limit 10 --include-status new,needs_retry
+python -m sf_report_agent.main worker --limit 10
 ```
 
 `doctor` valida SQLite, DB propia, artifacts, Ollama y presencia del modelo. `sf-auth-status` verifica el modo y, en OAuth, prueba el refresh; en `sf_cli`, valida la sesión del alias sin mostrar el access token. `sf-doctor` usa password, refresh token o la sesión de Salesforce CLI según `SALESFORCE_AUTH_MODE`, muestra el modo/instance URL, intenta `describe`, `SELECT ... LIMIT 1`, campos visibles y las tres Campaign IDs del fixture; guarda el resultado en `artifacts/permission_reports/`.
@@ -205,6 +208,8 @@ python -m sf_report_agent.main run-once
 `inspect-schema` lista label, API name, tipo y `referenceTo` de los campos visibles. Guarda cada inspección en `artifacts/schema/<object>_describe_<timestamp>.json`.
 
 El dry-run no crea cliente Salesforce: interpreta, planifica, valida y exporta un dataset vacío con SOQL limitado a 200 filas. Una ejecución real exige credenciales y limita la exportación a `MAX_EXPORT_ROWS`.
+
+`run-pending` procesa en orden todas las tareas `category=salesforce` con status `new` (o los indicados en `--include-status`). Omite por defecto las que ya tengan una corrida final en la DB del worker; `--force` permite reprocesarlas. `--stop-on-error` corta ante el primer fallo y, sin esa opción, guarda el error y sigue con la próxima tarea. `worker` ofrece exactamente las mismas opciones y está pensado como entrypoint para un LaunchAgent periódico. Ninguno de los dos comandos envía mensajes a Slack.
 
 ## Flujo LangGraph
 

@@ -14,6 +14,13 @@ FINAL_STATUSES = {
     "failed",
 }
 
+PROCESSED_STATUSES = {
+    "dry_run_completed",
+    "done_pending_approval",
+    "done_pending_reply",
+    "needs_clarification",
+}
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -55,6 +62,21 @@ class ReportRunRepository:
             if cursor.lastrowid is None:
                 raise RuntimeError("SQLite no devolvió el ID de la corrida creada")
             return cursor.lastrowid
+
+    def has_processed_run(self, task_id: int) -> bool:
+        self.initialize()
+        placeholders = ", ".join("?" for _ in PROCESSED_STATUSES)
+        parameters: tuple[Any, ...] = (task_id, *sorted(PROCESSED_STATUSES))
+        with sqlite3.connect(self.db_path) as connection:
+            row = connection.execute(
+                f"""
+                SELECT 1 FROM report_runs
+                WHERE task_id = ? AND status IN ({placeholders})
+                LIMIT 1
+                """,
+                parameters,
+            ).fetchone()
+        return row is not None
 
     def finish_run(
         self,

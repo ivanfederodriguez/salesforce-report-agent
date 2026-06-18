@@ -7,6 +7,8 @@ import secrets
 import sys
 import webbrowser
 from collections.abc import Sequence
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, TypedDict
@@ -21,6 +23,7 @@ from sf_report_agent.graph.app import ReportAgentRunner
 from sf_report_agent.graph.nodes import AgentServices
 from sf_report_agent.llm.ollama_client import OllamaClient, OllamaError
 from sf_report_agent.logging_config import configure_logging
+from sf_report_agent.models.execution_result import ExecutionResult
 from sf_report_agent.salesforce.client import SalesforceClient, SalesforceClientError
 from sf_report_agent.salesforce.oauth import (
     OAuthCallbackReceiver,
@@ -47,6 +50,39 @@ class SchemaField(TypedDict):
     name: str
     type: str
     referenceTo: list[str]
+
+
+class BatchTaskRunner(Protocol):
+    def run(self, task_id: int, *, dry_run: bool = False) -> ExecutionResult: ...
+
+
+@dataclass(slots=True)
+class BatchRunSummary:
+    processed_task_ids: list[int] = dataclass_field(default_factory=list)
+    skipped_task_ids: list[int] = dataclass_field(default_factory=list)
+    failed_task_ids: list[int] = dataclass_field(default_factory=list)
+    task_statuses: dict[int, str] = dataclass_field(default_factory=dict)
+    errors: dict[int, str] = dataclass_field(default_factory=dict)
+
+    @property
+    def processed(self) -> int:
+        return len(self.processed_task_ids)
+
+    @property
+    def skipped(self) -> int:
+        return len(self.skipped_task_ids)
+
+    @property
+    def failed(self) -> int:
+        return len(self.failed_task_ids)
+
+    @property
+    def pending_approval(self) -> int:
+        return sum(status == "done_pending_approval" for status in self.task_statuses.values())
+
+    @property
+    def needs_clarification(self) -> int:
+        return sum(status == "needs_clarification" for status in self.task_statuses.values())
 
 
 def _ollama(settings: Settings) -> OllamaClient:
@@ -403,6 +439,139 @@ def command_run_once(settings: Settings, *, dry_run: bool) -> int:
     return _run_task(settings, task.id, dry_run=dry_run)
 
 
+def _parse_include_statuses(value: str) -> tuple[str, ...]:
+    statuses = tuple(
+        dict.fromkeys(item.strip().casefold() for item in value.split(",") if item.strip())
+    )
+    if not statuses:
+        raise argparse.ArgumentTypeError("--include-status requiere al menos un status")
+    invalid = [status for status in statuses if not re.fullmatch(r"[a-z0-9_]+", status)]
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            "Status inválido en --include-status: " + ", ".join(invalid)
+        )
+    return statuses
+
+
+def run_pending_tasks(
+    settings: Settings,
+    *,
+    limit: int,
+    dry_run: bool,
+    stop_on_error: bool,
+    include_statuses: Sequence[str] = ("new",),
+    skip_already_processed: bool = True,
+    force: bool = False,
+    runner: BatchTaskRunner | None = None,
+) -> BatchRunSummary:
+    if limit < 1:
+        raise ValueError("limit debe ser mayor que cero")
+
+    tasks = TaskReader(settings.source_db_path).list_pending_salesforce_tasks(include_statuses)
+    repository = ReportRunRepository(settings.worker_db_path)
+    summary = BatchRunSummary()
+    active_runner = runner
+
+    for task in tasks:
+        if skip_already_processed and not force and repository.has_processed_run(task.id):
+            summary.skipped_task_ids.append(task.id)
+            continue
+        if summary.processed + summary.failed >= limit:
+            break
+        if active_runner is None:
+            try:
+                active_runner = ReportAgentRunner(_services(settings, dry_run=dry_run))
+            except Exception as exc:
+                run_id = repository.start_run(task.id)
+                repository.finish_run(run_id, status="failed", error=str(exc))
+                summary.failed_task_ids.append(task.id)
+                summary.errors[task.id] = str(exc)
+                if stop_on_error:
+                    break
+                continue
+        try:
+            result = active_runner.run(task.id, dry_run=dry_run)
+        except Exception as exc:
+            summary.failed_task_ids.append(task.id)
+            summary.errors[task.id] = str(exc)
+            if stop_on_error:
+                break
+            continue
+
+        if result.status == "failed":
+            summary.failed_task_ids.append(task.id)
+            summary.errors[task.id] = "; ".join(result.errors) or "La corrida terminó como failed"
+            if stop_on_error:
+                break
+            continue
+        summary.processed_task_ids.append(task.id)
+        summary.task_statuses[task.id] = result.status
+
+    return summary
+
+
+def _print_batch_summary(summary: BatchRunSummary, *, output: Console | None = None) -> None:
+    target = output or console
+    table = Table(title="Resumen de tareas Salesforce pendientes")
+    table.add_column("Resultado")
+    table.add_column("Cantidad", justify="right")
+    table.add_row("Procesadas", str(summary.processed))
+    table.add_row("Omitidas", str(summary.skipped))
+    table.add_row("Fallidas", str(summary.failed))
+    table.add_row("Pendientes de aprobación", str(summary.pending_approval))
+    table.add_row("Pendientes de aclaración", str(summary.needs_clarification))
+    target.print(table)
+    if summary.failed_task_ids:
+        for task_id in summary.failed_task_ids:
+            target.print(f"[red]Task {task_id} falló:[/red] {summary.errors[task_id]}")
+
+
+def command_run_pending(
+    settings: Settings,
+    *,
+    limit: int,
+    dry_run: bool,
+    stop_on_error: bool,
+    include_statuses: Sequence[str],
+    skip_already_processed: bool,
+    force: bool,
+    output: Console | None = None,
+) -> int:
+    summary = run_pending_tasks(
+        settings,
+        limit=limit,
+        dry_run=dry_run,
+        stop_on_error=stop_on_error,
+        include_statuses=include_statuses,
+        skip_already_processed=skip_already_processed,
+        force=force,
+    )
+    _print_batch_summary(summary, output=output)
+    return 1 if summary.failed else 0
+
+
+def _add_pending_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--stop-on-error", action="store_true")
+    parser.add_argument(
+        "--include-status",
+        type=_parse_include_statuses,
+        default=("new",),
+        help="Statuses fuente separados por coma (default: new)",
+    )
+    parser.add_argument(
+        "--skip-already-processed",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Reprocesa aunque ya exista una corrida final",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="sf-report-agent")
     parser.add_argument("--env-file", type=Path, default=None)
@@ -428,6 +597,14 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--dry-run", action="store_true")
     once_parser = subparsers.add_parser("run-once", help="Ejecuta la próxima tarea Salesforce")
     once_parser.add_argument("--dry-run", action="store_true")
+    pending_parser = subparsers.add_parser(
+        "run-pending", help="Ejecuta todas las tareas Salesforce pendientes"
+    )
+    _add_pending_arguments(pending_parser)
+    worker_parser = subparsers.add_parser(
+        "worker", help="Alias de run-pending para ejecución periódica"
+    )
+    _add_pending_arguments(worker_parser)
     return parser
 
 
@@ -457,6 +634,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _run_task(settings, args.task_id, dry_run=args.dry_run)
         if args.command == "run-once":
             return command_run_once(settings, dry_run=args.dry_run)
+        if args.command in {"run-pending", "worker"}:
+            return command_run_pending(
+                settings,
+                limit=args.limit,
+                dry_run=args.dry_run,
+                stop_on_error=args.stop_on_error,
+                include_statuses=args.include_status,
+                skip_already_processed=args.skip_already_processed,
+                force=args.force,
+            )
     except (
         SourceDatabaseError,
         SalesforceClientError,
