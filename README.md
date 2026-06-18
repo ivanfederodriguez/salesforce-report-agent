@@ -143,6 +143,8 @@ FIELD_MAPPING_PATH=config/field_mapping.json
 
 Un valor `null` produce una advertencia y, si el campo fue solicitado, una aclaración; el agente no inventa campos. Las fuentes de origen también requieren mapping explícito, por ejemplo `"campaña_origen": "LeadSource"` dentro de `donation.fields`.
 
+El objeto de donación puede definir `date_field` para el filtro anual y uno o más `campaign_filter_fields`. Cuando hay varios, el SOQL los combina con `OR`. `campaign_relationships` permite incluir el nombre relacionado en el `SELECT`, sin asumir `CampaignId`, `CloseDate` ni nombres de relaciones universales. El mapping real NPSP está en [`config/field_mapping.json`](config/field_mapping.json).
+
 Los datos personales sobre un objeto de donación solo se agregan cuando el mapping incluye una relación inequívoca, por ejemplo:
 
 ```json

@@ -1,6 +1,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 import openpyxl
 
@@ -12,6 +13,79 @@ from sf_report_agent.graph.app import ReportAgentRunner
 from sf_report_agent.graph.nodes import AgentServices
 from sf_report_agent.models.execution_result import ExecutionResult
 from sf_report_agent.models.task import ExternalTask
+
+
+class RecurringDonationSalesforceClient(FakeSalesforceClient):
+    def describe_object(self, object_name: str) -> dict[str, Any]:
+        if object_name != "npe03__Recurring_Donation__c":
+            return super().describe_object(object_name)
+        fields = [
+            {"name": "Id", "type": "id"},
+            {"name": "Name", "type": "string"},
+            {"name": "npe03__Amount__c", "type": "currency"},
+            {"name": "npsp__Status__c", "type": "picklist"},
+            {"name": "npsp__StartDate__c", "type": "date"},
+            {"name": "npsp__EndDate__c", "type": "date"},
+            {"name": "npe03__Date_Established__c", "type": "date"},
+            {"name": "Fecha_de_alta__c", "type": "date"},
+            {
+                "name": "npe03__Contact__c",
+                "type": "reference",
+                "referenceTo": ["Contact"],
+                "relationshipName": "npe03__Contact__r",
+            },
+            {
+                "name": "Campa_a_de_origen__c",
+                "type": "reference",
+                "referenceTo": ["Campaign"],
+                "relationshipName": "Campa_a_de_origen__r",
+            },
+            {
+                "name": "npe03__Recurring_Donation_Campaign__c",
+                "type": "reference",
+                "referenceTo": ["Campaign"],
+                "relationshipName": "npe03__Recurring_Donation_Campaign__r",
+            },
+        ]
+        return {
+            "fields": [
+                {
+                    "label": field["name"],
+                    "referenceTo": [],
+                    "relationshipName": None,
+                    **field,
+                }
+                for field in fields
+            ]
+        }
+
+    def query_all(self, soql: str) -> list[dict[str, Any]]:
+        self.queried_soql.append(soql)
+        return [
+            {
+                "attributes": {"type": "npe03__Recurring_Donation__c"},
+                "Id": "a0R000000000001",
+                "npe03__Amount__c": 1500,
+                "npsp__Status__c": "Activa",
+                "npsp__StartDate__c": "2026-02-15",
+                "npsp__EndDate__c": None,
+                "npe03__Date_Established__c": "2026-02-10",
+                "Fecha_de_alta__c": "2026-02-15",
+                "npe03__Contact__r": {
+                    "Name": "Persona Uno",
+                    "Birthdate": "1990-01-01",
+                    "MailingCity": "Córdoba",
+                    "MailingState": "Córdoba",
+                    "MailingCountry": "Argentina",
+                },
+                "Campa_a_de_origen__c": self.campaign_ids[0],
+                "Campa_a_de_origen__r": {"Name": "[IND] Campañas Pauta Digital"},
+                "npe03__Recurring_Donation_Campaign__c": self.campaign_ids[1],
+                "npe03__Recurring_Donation_Campaign__r": {
+                    "Name": "[IND] Redes Sociales"
+                },
+            }
+        ]
 
 
 def _settings(tmp_path: Path, source_db: Path, *, mapping_path: Path | None = None) -> Settings:
@@ -90,6 +164,49 @@ def test_full_graph_with_mock_salesforce_generates_artifacts(
     assert "informe de altas 2026" in result.response_text
     assert "[IND] Campañas Pauta Digital" in result.response_text
     assert "amplify, orgánico web" in result.response_text
+
+
+def test_task_23_uses_recurring_donation_mapping_and_real_fields(
+    tmp_path: Path,
+    micaela_task: ExternalTask,
+) -> None:
+    task_23 = micaela_task.model_copy(update={"id": 23})
+    mapping_path = Path(__file__).parents[1] / "config" / "field_mapping.json"
+    salesforce = RecurringDonationSalesforceClient()
+
+    result, settings = _run(
+        tmp_path,
+        task_23,
+        salesforce,
+        mapping_path=mapping_path,
+    )
+
+    assert settings.field_mapping_path == mapping_path
+    assert result.status == "done_pending_approval"
+    assert "FROM npe03__Recurring_Donation__c" in result.soql
+    assert (
+        "Campa_a_de_origen__c IN "
+        "('7011W000001buEh', '701Pe00000VtQrK', '701Pe00000QysD4IAJ')"
+    ) in result.soql
+    assert (
+        "npe03__Recurring_Donation_Campaign__c IN "
+        "('7011W000001buEh', '701Pe00000VtQrK', '701Pe00000QysD4IAJ')"
+    ) in result.soql
+    assert " OR " in result.soql
+    assert "CALENDAR_YEAR(npsp__StartDate__c) = 2026" in result.soql
+    assert "CampaignId" not in result.soql
+    assert "CloseDate" not in result.soql
+    for relationship_field in (
+        "npe03__Contact__r.Name",
+        "npe03__Contact__r.Birthdate",
+        "npe03__Contact__r.MailingCity",
+        "npe03__Contact__r.MailingState",
+        "npe03__Contact__r.MailingCountry",
+        "Campa_a_de_origen__r.Name",
+        "npe03__Recurring_Donation_Campaign__r.Name",
+    ):
+        assert relationship_field in result.soql
+    assert salesforce.queried_soql == [result.soql]
 
 
 def test_dry_run_never_queries_salesforce(

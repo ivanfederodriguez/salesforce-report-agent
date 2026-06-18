@@ -114,6 +114,16 @@ def _object_field_names(snapshot: dict[str, Any], object_name: str) -> set[str]:
     }
 
 
+def _object_fields_by_name(
+    snapshot: dict[str, Any], object_name: str
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(field["name"]): field
+        for field in snapshot.get("objects", {}).get(object_name, {}).get("fields", [])
+        if field.get("name")
+    }
+
+
 def _object_relationship_names(snapshot: dict[str, Any], object_name: str) -> set[str]:
     return {
         str(field["relationshipName"])
@@ -130,6 +140,30 @@ def _mapped_value(mapping: dict[str, Any], semantic_name: str) -> Any:
         "campaña_origen": "fuente_origen",
     }
     return mapping.get(semantic_name, mapping.get(aliases.get(semantic_name, "")))
+
+
+def _relationship_name_for_field(field_name: str, field: dict[str, Any] | None) -> str | None:
+    if field is not None:
+        relationship_name = field.get("relationshipName")
+        if isinstance(relationship_name, str) and relationship_name:
+            return relationship_name
+    if field_name.endswith("__c"):
+        return field_name[:-3] + "__r"
+    if field_name.endswith("Id"):
+        return field_name[:-2]
+    return None
+
+
+def _references_campaign(field: dict[str, Any] | None) -> bool:
+    if field is None:
+        return False
+    references = field.get("referenceTo", [])
+    return isinstance(references, list) and "Campaign" in references
+
+
+def _configured_api_names(value: Any) -> list[str]:
+    values = value if isinstance(value, list) else [value]
+    return [item for item in values if isinstance(item, str) and item]
 
 
 def build_report_plan(
@@ -157,6 +191,7 @@ def build_report_plan(
         questions.append("¿Cuál es el mapping de campos de la donación?")
     selected = ["Id"]
     available = _object_field_names(snapshot, primary_object)
+    field_details = _object_fields_by_name(snapshot, primary_object)
     offline = bool(snapshot.get("offline"))
 
     for semantic_name in request.donation_fields:
@@ -178,11 +213,97 @@ def build_report_plan(
                 warnings.append(f"El campo {primary_object}.{value} no está visible en el schema.")
                 questions.append(f"¿Qué campo visible de {primary_object} reemplaza a {value}?")
 
-    if request.campaign_ids and "CampaignId" not in selected:
-        selected.append("CampaignId")
-    date_field = "CreatedDate" if primary_object == "CampaignMember" else "CloseDate"
-    if request.year is not None and (offline or date_field in available):
-        selected.append(date_field)
+    configured_campaign_fields = donation.get("campaign_filter_fields")
+    has_explicit_campaign_fields = configured_campaign_fields is not None
+    if has_explicit_campaign_fields:
+        campaign_candidates = _configured_api_names(configured_campaign_fields)
+        if not isinstance(configured_campaign_fields, (str, list)) or not campaign_candidates:
+            warnings.append("donation.campaign_filter_fields no contiene API names válidos.")
+    else:
+        campaign_candidates = _configured_api_names(
+            [
+                _mapped_value(donation_mapping, "campaña_origen"),
+                _mapped_value(donation_mapping, "campaña"),
+            ]
+        )
+    campaign_relationships_value = donation.get("campaign_relationships", {})
+    campaign_relationships = (
+        campaign_relationships_value
+        if isinstance(campaign_relationships_value, dict)
+        else {}
+    )
+    if not isinstance(campaign_relationships_value, dict):
+        warnings.append("donation.campaign_relationships no es un objeto válido.")
+
+    campaign_filter_fields: list[str] = []
+    for field_name in campaign_candidates:
+        field = field_details.get(field_name)
+        if offline:
+            is_campaign_field = has_explicit_campaign_fields or field_name.endswith(
+                ("Id", "__c")
+            )
+        else:
+            is_campaign_field = _references_campaign(field)
+        if not is_campaign_field:
+            if has_explicit_campaign_fields:
+                warnings.append(
+                    f"El campo {primary_object}.{field_name} no referencia Campaign."
+                )
+            continue
+        if not offline and field_name not in available:
+            warnings.append(
+                f"El campo de campaña {primary_object}.{field_name} no está visible."
+            )
+            continue
+        campaign_filter_fields.append(field_name)
+        selected.append(field_name)
+        configured_relationship = campaign_relationships.get(field_name)
+        relationship_name = (
+            configured_relationship
+            if isinstance(configured_relationship, str) and configured_relationship
+            else _relationship_name_for_field(field_name, field)
+        )
+        if relationship_name:
+            selected.append(f"{relationship_name}.Name")
+
+    campaign_filter_fields = list(dict.fromkeys(campaign_filter_fields))
+    if request.campaign_ids and not campaign_filter_fields:
+        questions.append(
+            f"¿Qué campos visibles de {primary_object} referencian las campañas solicitadas?"
+        )
+
+    date_field: str | None = None
+    if request.year is not None:
+        configured_date_field = donation.get("date_field")
+        if configured_date_field is None:
+            date_semantics = (
+                ("fecha_efectiva", "fecha_alta", "fecha_establecida")
+                if request.report_type == "altas_por_campaña"
+                else ("fecha_establecida", "fecha_efectiva", "fecha_alta")
+            )
+            configured_date_field = next(
+                (
+                    _mapped_value(donation_mapping, semantic_name)
+                    for semantic_name in date_semantics
+                    if _mapped_value(donation_mapping, semantic_name)
+                ),
+                None,
+            )
+        if not isinstance(configured_date_field, str) or not configured_date_field:
+            warnings.append("No hay un campo de fecha primario configurado para el reporte.")
+            questions.append(
+                f"¿Qué campo de {primary_object} representa la fecha para el año {request.year}?"
+            )
+        elif not offline and configured_date_field not in available:
+            warnings.append(
+                f"El campo de fecha {primary_object}.{configured_date_field} no está visible."
+            )
+            questions.append(
+                f"¿Qué campo visible de {primary_object} representa la fecha del reporte?"
+            )
+        else:
+            date_field = configured_date_field
+            selected.append(date_field)
 
     origin_source_field: str | None = None
     if request.origin_sources:
@@ -204,6 +325,10 @@ def build_report_plan(
         else:
             origin_source_field = origin_mapping
             selected.append(origin_mapping)
+            if origin_mapping in campaign_filter_fields and not request.campaign_ids:
+                questions.append(
+                    "¿Cuáles son los Campaign IDs que representan las fuentes de origen solicitadas?"
+                )
 
     # Los campos personales solo se consultan mediante una relación configurada y verificable.
     relationships_value = mapping.get("relationships", {})
@@ -280,26 +405,6 @@ def build_report_plan(
         questions.append(
             f"¿Qué objeto contiene las altas/donaciones? '{primary_object}' no está accesible."
         )
-    if primary_object not in {"Opportunity", "CampaignMember"}:
-        questions.append(
-            f"El objeto {primary_object} requiere definir explícitamente sus campos de campaña y fecha."
-        )
-    if (
-        request.campaign_ids
-        and not offline
-        and primary_object in snapshot.get("objects", {})
-        and "CampaignId" not in available
-    ):
-        questions.append(f"{primary_object} no expone CampaignId para filtrar las campañas.")
-    if (
-        request.year
-        and not offline
-        and primary_object in snapshot.get("objects", {})
-        and date_field not in available
-    ):
-        questions.append(
-            f"{primary_object} no expone {date_field} para filtrar el año {request.year}."
-        )
     if request.campaign_names and not request.campaign_ids:
         questions.append("¿Cuáles son los Campaign IDs de las campañas identificadas por nombre?")
     if not request.campaign_ids and not request.campaign_names and not request.origin_sources:
@@ -318,12 +423,18 @@ def build_report_plan(
             title = f"{title} {request.year}"
         description = f"{title} para el alcance solicitado."
     filters = []
-    if request.campaign_ids:
-        filters.append("CampaignId en campañas solicitadas")
-    if request.origin_sources and origin_source_field:
+    if request.campaign_ids and campaign_filter_fields:
+        filters.append(
+            " o ".join(campaign_filter_fields) + " en campañas solicitadas"
+        )
+    if (
+        request.origin_sources
+        and origin_source_field
+        and origin_source_field not in campaign_filter_fields
+    ):
         filters.append(f"{origin_source_field} en fuentes de origen solicitadas")
-    if request.year:
-        filters.append(f"Año {request.year}")
+    if request.year and date_field:
+        filters.append(f"Año {request.year} según {date_field}")
     return SalesforceReportPlan(
         task_id=request.task_id,
         title=title,
@@ -332,10 +443,12 @@ def build_report_plan(
         selected_fields=list(dict.fromkeys(selected)),
         filters=filters,
         campaign_ids=request.campaign_ids,
+        campaign_filter_fields=campaign_filter_fields,
         origin_sources=request.origin_sources,
         origin_source_field=origin_source_field,
-        date_filter_description=f"Desde {request.year}-01-01 hasta antes de {request.year + 1}-01-01"
-        if request.year
+        date_filter_field=date_field,
+        date_filter_description=f"CALENDAR_YEAR({date_field}) = {request.year}"
+        if request.year and date_field
         else None,
         joins_or_relationships=[validated_person_prefix] if validated_person_prefix else [],
         warnings=warnings,

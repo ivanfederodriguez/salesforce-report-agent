@@ -1,0 +1,36 @@
+{
+  "person": {
+    "object": "Contact",
+    "fields": {
+      "nombre_y_apellido": "Name",
+      "fecha_nacimiento": "Birthdate",
+      "residencia": ["MailingCity", "MailingState", "MailingCountry"]
+    }
+  },
+  "donation": {
+    "object": "npe03__Recurring_Donation__c",
+    "date_field": "npsp__StartDate__c",
+    "campaign_filter_fields": [
+      "Campa_a_de_origen__c",
+      "npe03__Recurring_Donation_Campaign__c"
+    ],
+    "campaign_relationships": {
+      "Campa_a_de_origen__c": "Campa_a_de_origen__r",
+      "npe03__Recurring_Donation_Campaign__c": "npe03__Recurring_Donation_Campaign__r"
+    },
+    "fields": {
+      "fecha_establecida": "npe03__Date_Established__c",
+      "estado": "npsp__Status__c",
+      "monto": "npe03__Amount__c",
+      "fecha_finalizacion": "npsp__EndDate__c",
+      "campaña": "npe03__Recurring_Donation_Campaign__c",
+      "campaña_origen": "Campa_a_de_origen__c",
+      "fecha_alta": "Fecha_de_alta__c",
+      "fecha_efectiva": "npsp__StartDate__c",
+      "canal_origen": "Canal_de_ingreso1__c"
+    }
+  },
+  "relationships": {
+    "person_from_donation": "npe03__Contact__r"
+  }
+}

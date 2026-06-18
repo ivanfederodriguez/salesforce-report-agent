@@ -9,6 +9,11 @@
   },
   "donation": {
     "object": "Opportunity",
+    "date_field": "CloseDate",
+    "campaign_filter_fields": ["CampaignId"],
+    "campaign_relationships": {
+      "CampaignId": "Campaign"
+    },
     "fields": {
       "fecha_establecida": "CloseDate",
       "estado": "StageName",

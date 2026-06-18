@@ -24,19 +24,19 @@ def run_quality_checks(
         str(column): round(float(dataframe[column].isna().mean() * 100), 2)
         for column in dataframe.columns
     }
-    campaign_column = next(
-        (name for name in ("CampaignId", "Campaign.Id") if name in columns), None
-    )
-    found_campaigns = (
-        sorted(str(value) for value in dataframe[campaign_column].dropna().unique())
-        if campaign_column
-        else []
+    campaign_columns = [name for name in plan.campaign_filter_fields if name in columns]
+    found_campaigns = sorted(
+        {
+            str(value)
+            for campaign_column in campaign_columns
+            for value in dataframe[campaign_column].dropna().unique()
+        }
     )
     missing_campaigns = sorted(set(request.campaign_ids) - set(found_campaigns))
     if missing_campaigns:
         warnings.append("Campañas sin filas: " + ", ".join(missing_campaigns))
 
-    date_column = next((name for name in ("CloseDate", "CreatedDate") if name in columns), None)
+    date_column = plan.date_filter_field if plan.date_filter_field in columns else None
     dates_outside_period = 0
     if date_column and request.year and not dataframe.empty:
         parsed = pd.to_datetime(dataframe[date_column], errors="coerce", utc=True)

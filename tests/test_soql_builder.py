@@ -15,6 +15,8 @@ def _plan() -> SalesforceReportPlan:
         selected_fields=["Id", "CloseDate", "Amount", "CampaignId"],
         filters=[],
         campaign_ids=["7011W000001buEh"],
+        campaign_filter_fields=["CampaignId"],
+        date_filter_field="CloseDate",
     )
 
 
@@ -30,7 +32,7 @@ def test_builds_safe_dry_run_soql() -> None:
     assert soql.startswith("SELECT ")
     assert "FROM Opportunity" in soql
     assert "CampaignId IN ('7011W000001buEh')" in soql
-    assert "CloseDate >= 2026-01-01" in soql
+    assert "CALENDAR_YEAR(CloseDate) = 2026" in soql
     assert soql.endswith("LIMIT 200")
 
 

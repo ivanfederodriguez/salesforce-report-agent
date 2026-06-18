@@ -44,14 +44,29 @@ class SOQLBuilder:
             fields.insert(0, "Id")
 
         campaign_ids = [self._campaign_id(value) for value in request.campaign_ids]
-        campaign_field = "CampaignId"
-        if primary_object == "CampaignMember":
-            campaign_field = "CampaignId"
         scope_filters: list[str] = []
         if campaign_ids:
+            campaign_fields = [
+                self._api_name(value) for value in plan.campaign_filter_fields
+            ]
+            if not campaign_fields:
+                raise ValueError("Falta el mapping de campos de campaña")
             quoted_ids = ", ".join(f"'{value}'" for value in campaign_ids)
-            scope_filters.append(f"{campaign_field} IN ({quoted_ids})")
-        if request.origin_sources:
+            campaign_filters = [
+                f"{campaign_field} IN ({quoted_ids})"
+                for campaign_field in campaign_fields
+            ]
+            scope_filters.append(
+                campaign_filters[0]
+                if len(campaign_filters) == 1
+                else "(" + " OR ".join(campaign_filters) + ")"
+            )
+        origin_covered_by_campaign_ids = bool(
+            campaign_ids
+            and plan.origin_source_field
+            and plan.origin_source_field in plan.campaign_filter_fields
+        )
+        if request.origin_sources and not origin_covered_by_campaign_ids:
             if not plan.origin_source_field:
                 raise ValueError("Falta el mapping del campo de campaña de origen/fuente")
             origin_field = self._api_name(plan.origin_source_field)
@@ -65,9 +80,10 @@ class SOQLBuilder:
         filters = [scope]
 
         if request.year is not None:
-            date_field = "CreatedDate" if primary_object == "CampaignMember" else "CloseDate"
-            filters.append(f"{date_field} >= {request.year}-01-01")
-            filters.append(f"{date_field} < {request.year + 1}-01-01")
+            if not plan.date_filter_field:
+                raise ValueError("Falta el mapping del campo de fecha")
+            date_field = self._api_name(plan.date_filter_field)
+            filters.append(f"CALENDAR_YEAR({date_field}) = {request.year}")
 
         limit = min(200, self.max_rows) if dry_run else self.max_rows
         soql = (

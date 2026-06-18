@@ -9,8 +9,10 @@ class SalesforceReportPlan(BaseModel):
     selected_fields: list[str]
     filters: list[str]
     campaign_ids: list[str]
+    campaign_filter_fields: list[str] = Field(default_factory=list)
     origin_sources: list[str] = Field(default_factory=list)
     origin_source_field: str | None = None
+    date_filter_field: str | None = None
     date_filter_description: str | None = None
     joins_or_relationships: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
